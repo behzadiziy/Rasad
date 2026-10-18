@@ -1,93 +1,193 @@
-# JobHunter-JJ
+# Job Hunter Agent
 
+An asynchronous job-search agent for two Iranian job boards, [JobVision](https://jobvision.ir) and [Jobinja](https://jobinja.ir). It scrapes new postings, filters them against your search profiles with a Persian-aware rule engine, stores them in SQLite, and sends the matches to a Telegram channel.
 
+## Status
 
-## Getting started
+| Phase | Scope | State |
+| --- | --- | --- |
+| 1 | Scrape → filter → persist → notify via Telegram | ✅ Done (Tasks 1–6) |
+| 2 | Tailor the master resume to a job with an LLM (Gemini), review and approve it from Telegram | Planned (Tasks 7–10) |
+| 3 | Submit the approved application on the job board | Planned (Tasks 11–12) |
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+The task prompts live in [tasks/](tasks/).
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+## How it works
 
-## Add your files
+Each run goes through four steps:
 
-* [Create](https://docs.gitlab.com/user/project/repository/web_editor/#create-a-file) or [upload](https://docs.gitlab.com/user/project/repository/web_editor/#upload-a-file) files
-* [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
+1. **Scrape.** Playwright opens the search pages for every keyword in your profiles, one platform at a time. A job's detail page is visited only when the job is not already in the database.
+2. **Filter.** The rule engine checks each job against every search profile:
+   - at least one keyword appears as a whole word in the title or description;
+   - no exclusion keyword appears in the title;
+   - the city and work mode satisfy the profile's location rules.
+3. **Persist.** Matching jobs are saved as `NEW`. Jobs that match no profile are saved as `IGNORED`, so they are not scraped again.
+4. **Notify.** Every `NEW` job is sent to Telegram and becomes `NOTIFIED`. If a send fails, the job stays `NEW` and is retried on the next run.
 
-```
-cd existing_repo
-git remote add origin https://gitlab.com/behzadiziy/jobhunter-jj.git
-git branch -M main
-git push -uf origin main
-```
+Persian and English text are normalized the same way before matching. Messages and the database keep the original text.
 
-## Integrate with your tools
+## Requirements
 
-* [Set up project integrations](https://gitlab.com/behzadiziy/jobhunter-jj/-/settings/integrations)
-
-## Collaborate with your team
-
-* [Invite team members and collaborators](https://docs.gitlab.com/user/project/members/)
-* [Create a new merge request](https://docs.gitlab.com/user/project/merge_requests/creating_merge_requests/)
-* [Automatically close issues from merge requests](https://docs.gitlab.com/user/project/issues/managing_issues/#closing-issues-automatically)
-* [Enable merge request approvals](https://docs.gitlab.com/user/project/merge_requests/approvals/)
-* [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
-
-## Test and Deploy
-
-Use the built-in continuous integration in GitLab.
-
-* [Get started with GitLab CI/CD](https://docs.gitlab.com/ci/quick_start/)
-* [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/user/application_security/sast/)
-* [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/topics/autodevops/requirements/)
-* [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/user/clusters/agent/)
-* [Set up protected environments](https://docs.gitlab.com/ci/environments/protected_environments/)
-
-***
-
-# Editing this README
-
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
-
-## Suggestions for a good README
-
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
-
-## Name
-Choose a self-explaining name for your project.
-
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
-
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
-
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+- Linux (developed on Ubuntu 25.10)
+- Python 3.11 or newer (the repository pins 3.12 in `.python-version`)
+- [uv](https://docs.astral.sh/uv/)
+- A Telegram bot token from [@BotFather](https://t.me/BotFather) and a channel where the bot is an admin
+- From Iran: a local HTTP or SOCKS proxy for PyPI, the Playwright download, and Telegram
 
 ## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
+
+```bash
+uv sync
+uv run playwright install chromium
+cp config/.env.example config/.env   # then fill in the values
+uv run pytest
+```
+
+### Installing behind a proxy
+
+From an Iranian connection, `files.pythonhosted.org` is often unreachable, and `uv sync` fails with `client error (Connect) … operation timed out`. Point uv at your local proxy through environment variables:
+
+```bash
+export HTTP_PROXY=http://127.0.0.1:10808
+export HTTPS_PROXY=http://127.0.0.1:10808
+export UV_HTTP_TIMEOUT=120
+uv sync
+```
+
+Replace `10808` with your proxy's port. To keep these settings, add the lines to `~/.zshrc` or `~/.bashrc`.
+
+Do not wrap uv in `proxychains4` while these variables are set. uv already connects to the proxy itself, so proxychains would route the proxy connection through the proxy again, and every download fails with `socket error or timeout`.
+
+`uv run playwright install chromium` uses the same variables. Playwright may print `your OS is not officially supported` and download the Ubuntu 24.04 build; that is expected.
+
+## Configuration
+
+### Secrets: `config/.env`
+
+Copy [config/.env.example](config/.env.example) to `config/.env`. This file is gitignored and must never be committed.
+
+| Variable | Required | Description |
+| --- | --- | --- |
+| `TELEGRAM_BOT_TOKEN` | Yes | Bot token from @BotFather |
+| `TELEGRAM_CHAT_ID` | Yes | `@channelname` or a numeric ID such as `-1001234567890` |
+| `TELEGRAM_PROXY_URL` | From Iran | Proxy for Telegram API calls, e.g. `socks5://127.0.0.1:10808` or `http://127.0.0.1:10808` |
+| `DB_PATH` | No | SQLite file, default `data/jobs.db` |
+| `HEADLESS` | No | `true` or `false`; `--headful` overrides it |
+
+The Telegram notifier ignores `HTTP_PROXY` and `HTTPS_PROXY`. If Telegram is filtered on your connection, set `TELEGRAM_PROXY_URL` even when those variables are exported.
+
+### Search rules: `config/config.yaml`
+
+```yaml
+scheduler:
+  interval_minutes: 30          # how often --daemon runs the pipeline
+  active_hours: "08:00-23:00"   # runs outside this window are skipped; may cross midnight
+  timezone: "Asia/Tehran"
+
+scraping:
+  enabled_platforms: ["jobvision", "jobinja"]
+  max_pages_per_keyword: 2
+
+city_aliases:                   # canonical city key → spellings found in postings
+  mashhad: ["mashhad", "مشهد"]
+  tehran: ["tehran", "تهران"]
+
+search_profiles:
+  - profile_name: "AI & Automation"
+    keywords: ["AI", "هوش مصنوعی", "n8n", "Agentic", "LLM", "RAG"]
+    exclude_keywords: ["کارآموز", "Intern"]
+    location_rules:
+      - city: "mashhad"
+        remote_only: false      # Mashhad: on-site, hybrid, and remote
+      - city: "ALL"
+        remote_only: true       # any other or unknown city: remote only
+```
+
+How the rules are applied:
+
+- **Keywords** match whole words, case-insensitively. Spaces inside a keyword match any whitespace. A Latin keyword also matches its plural with a trailing `s` (`LLM` matches `LLMs`).
+- **Location rules.** A rule for the job's own city takes precedence. If no rule names the job's city, the `ALL` rule decides. If there is no `ALL` rule either, the job is rejected. A profile with no location rules accepts every location.
+- **Work mode** comes from structured fields and labels on the job page, never from the free-text description. When it cannot be determined, it is `ONSITE`.
 
 ## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
 
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
+### First run
 
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
+Both sites sit behind Cloudflare. Run once with a visible browser so you can pass a challenge by hand if one appears. The session is saved to `data/browser_state/` and reused by later headless runs.
 
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
+```bash
+uv run python main.py --once --headful
+```
 
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
+The first run with an empty database visits many detail pages (about 6 seconds each), so it takes a while. A heartbeat in the log shows that it is still making progress.
 
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
+### Regular runs
 
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
+```bash
+uv run python main.py --once     # run the pipeline once, e.g. from cron or a systemd timer
+uv run python main.py --daemon   # run every interval_minutes until Ctrl+C or SIGTERM
+```
 
-## License
-For open source projects, say how it is licensed.
+| Option | Description |
+| --- | --- |
+| `--once` | Run the pipeline once and exit |
+| `--daemon` | Run on the schedule in `config/config.yaml` |
+| `--headful` | Show the browser window |
+| `--debug-capture` | Save intercepted JSON and HTML under `data/debug/` |
 
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+`--once` exit codes:
+
+| Code | Meaning |
+| --- | --- |
+| 0 | Success |
+| 1 | Fatal error in settings, config, or the database |
+| 2 | Finished with problems: a platform failed, or some notifications are still pending |
+| 130 | Interrupted |
+
+### Logs
+
+Logs go to the console at INFO level and to `data/logs/job_hunter.log` at DEBUG level. The file rotates at 10 MB and is kept for 14 days.
+
+### Probing a site
+
+When a site changes its pages or API, the probe opens a page in a visible browser and saves every JSON response and the HTML to `data/debug/{platform}/`:
+
+```bash
+uv run python -m scripts.probe --platform jobinja --keyword "هوش مصنوعی"
+uv run python -m scripts.probe --platform jobvision --keyword AI --wait 20
+uv run python -m scripts.probe --platform jobinja --url <job detail URL> --headless
+```
+
+## Project layout
+
+```text
+main.py                  entry point: --once and --daemon
+config/                  config.yaml, .env.example (and your .env)
+src/
+  models.py              settings, config models, JobPost, job statuses
+  rule_engine.py         Persian-aware keyword and location matching
+  database.py            SQLite persistence (aiosqlite)
+  notifier/telegram.py   Telegram delivery (httpx)
+  scrapers/              Playwright scrapers for JobVision and Jobinja
+  utils.py               text normalization and human-like delays
+scripts/probe.py         live-site capture tool for building scrapers
+tests/                   pytest suite (no network, no browser)
+tasks/                   build task prompts
+data/                    runtime files: database, logs, browser state (gitignored)
+```
+
+## Data and privacy
+
+Everything under `data/` is created at run time and is gitignored: the database, logs, browser sessions, and debug captures. `config/.env` is gitignored as well. Phase 2 adds `inputs/` and `config/master_resume.yaml` for your resume; those must never be committed either.
+
+## Development
+
+The project is built task by task with Claude Code. [CLAUDE.md](CLAUDE.md) is the shared contract: interfaces, rules, and which files each task may change. The prompts are in [tasks/](tasks/), and [task-implement-flow.md](task-implement-flow.md) describes the workflow for each task (in Persian).
+
+Run the tests:
+
+```bash
+uv run pytest
+```
+
+The tests are plain synchronous functions that use `asyncio.run()`. They need neither the network nor a browser.
