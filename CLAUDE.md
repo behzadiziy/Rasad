@@ -217,7 +217,7 @@ def parse_detail_html(html: str) -> str | None: ...   # returns the description 
 - When the work mode cannot be determined, it defaults to `WorkMode.ONSITE`, logged at DEBUG. This is deliberately conservative: such jobs will not pass remote-only rules.
 - Never infer the work mode from free-text job descriptions. Negations such as «امکان دورکاری وجود ندارد» cause false positives. Use structured fields, badges, or short labels only.
 - All datetimes are timezone-aware and stored in UTC.
-- Scrapers visit a detail page only after `is_known(platform, external_id)` returns `False`. On detail pages, prefer JSON-LD `JobPosting` data and fall back to DOM selectors.
+- Scrapers visit a detail page only after `is_known(platform, external_id)` returns `False`. On detail pages, prefer JSON-LD `JobPosting` data and fall back to DOM selectors, with one exception for the description: if real samples show the JSON-LD description loses line breaks or merges words (as on JobVision), prefer the HTML description and fall back to JSON-LD.
 - Scrapers process keywords and pages sequentially (concurrency 1) and call `human_delay()` between navigations.
 - Never solve or bypass CAPTCHAs programmatically. In headful mode the user solves challenges manually.
 
