@@ -1,0 +1,22 @@
+scheduler:
+  interval_minutes: 30
+  active_hours: "08:00-23:00"
+  timezone: "Asia/Tehran"
+
+scraping:
+  enabled_platforms: ["jobvision", "jobinja"]
+  max_pages_per_keyword: 2
+
+city_aliases:
+  mashhad: ["mashhad", "مشهد"]
+  tehran: ["tehran", "تهران"]
+
+search_profiles:
+  - profile_name: "AI & Automation"
+    keywords: ["AI", "هوش مصنوعی", "n8n", "Agentic", "LLM", "RAG"]
+    exclude_keywords: ["کارآموز", "Intern"]
+    location_rules:
+      - city: "mashhad"
+        remote_only: false   # Mashhad: accept on-site, hybrid, and remote
+      - city: "ALL"
+        remote_only: true    # Any other or unknown city: accept REMOTE only

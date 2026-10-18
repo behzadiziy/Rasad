@@ -1,17 +1,32 @@
 [project]
 name = "job-hunter-agent"
 version = "0.1.0"
-description = "Add your description here"
+description = "Async scraper for JobVision and Jobinja with a Persian-aware rule engine, SQLite state, and Telegram notifications"
 readme = "README.md"
 authors = [
     { name = "behzadiziy", email = "behzadiziy@gmail.com" }
 ]
-requires-python = ">=3.12"
-dependencies = []
+requires-python = ">=3.11"
+dependencies = [
+    "playwright>=1.40",
+    "selectolax>=0.3",
+    "pydantic>=2",
+    "pydantic-settings>=2",
+    "pyyaml>=6",
+    "python-dotenv>=1",
+    "aiosqlite>=0.19",
+    "httpx[socks]>=0.26",
+    "tenacity>=8",
+    "apscheduler>=3.10,<4",
+    "loguru>=0.7",
+    "tzdata>=2024.1",
+]
 
-[project.scripts]
-job-hunter-agent = "job_hunter_agent:main"
+[dependency-groups]
+dev = [
+    "pytest>=8",
+]
 
-[build-system]
-requires = ["uv_build>=0.12.3,<0.13.0"]
-build-backend = "uv_build"
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
