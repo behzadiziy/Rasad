@@ -1,0 +1,536 @@
+{
+  "request_url": "https://candidateapi.jobvision.ir/api/v1/JobPost/List",
+  "method": "POST",
+  "request_post_data": "{\"pageSize\":30,\"requestedPage\":1,\"keyword\":\"ai\",\"sortBy\":1,\"searchId\":null}",
+  "status": 200,
+  "body": {
+    "traceId": null,
+    "isSuccess": true,
+    "statusCode": 0,
+    "message": "عملیات با موفقیت انجام شد",
+    "data": {
+      "currentPage": 1,
+      "pageSize": 30,
+      "jobPosts": [
+        {
+          "score": 0.7604005932807922,
+          "itemIndex": 1,
+          "searchPositionCoefficient": 1,
+          "labelDetails": [],
+          "id": 1411778,
+          "title": "AI Artist",
+          "isPersian": true,
+          "userJobPostInfo": {
+            "matchingScore": 0,
+            "isSuitableForCandidate": false,
+            "isBookmarked": false,
+            "isApplied": false,
+            "isCanceledApply": false,
+            "isAppliedAsVip": false,
+            "hasHighChanceBadge": null
+          },
+          "properties": {
+            "isInternship": false,
+            "isRemote": false,
+            "isUrgent": false,
+            "requiredRelatedExperienceYears": 3,
+            "suitableForDisabled": false,
+            "salaryCanBeShown": false,
+            "isCheckingResumes": false,
+            "typeId": 1,
+            "linkOutAddress": null,
+            "isBlueCollarJob": false
+          },
+          "company": {
+            "id": 2985,
+            "nameFa": "گروه ایران نوین",
+            "nameEn": "Iran Novin Group",
+            "hasPicture": true,
+            "logoFileId": 40260590,
+            "logoUrl": "https://fileapi.jobvision.ir/api/v1.0/files/getimage?fileid=40260590&width=50&height=50",
+            "pageUrl": "/companies/2985/استخدام-گروه-ایران-نوین",
+            "isEmployerResponsive": false,
+            "isFamous": false,
+            "isGovernmentalCompany": false,
+            "companyScore": 3.1839351148842745
+          },
+          "location": {
+            "country": {
+              "id": 1,
+              "title": null,
+              "titleFa": "ایران",
+              "titleEn": "Iran"
+            },
+            "province": {
+              "urlTitle": "all-cities-of-tehran",
+              "id": 17,
+              "title": "تهران",
+              "titleFa": "تهران",
+              "titleEn": "Tehran"
+            },
+            "city": {
+              "citySize": 4,
+              "citySizeGroupId": 1,
+              "province": null,
+              "urlTitle": "tehran",
+              "id": 320,
+              "title": null,
+              "titleFa": "تهران",
+              "titleEn": "Tehran"
+            },
+            "regionGroup": {
+              "id": 1,
+              "title": null,
+              "titleFa": "شمال",
+              "titleEn": "North"
+            },
+            "region": {
+              "id": 27,
+              "title": null,
+              "titleFa": "امانیه",
+              "titleEn": "Amanieh"
+            }
+          },
+          "jobCategories": [
+            {
+              "id": 13,
+              "title": null,
+              "titleFa": "طراحی گرافیک / طراحی انیمیشن و موشن گرافیک",
+              "titleEn": "Graphic Designer / Motion Graphic Designer"
+            }
+          ],
+          "benefits": [
+            {
+              "id": 116,
+              "title": "وام",
+              "titleFa": "وام",
+              "titleEn": "Loan"
+            },
+            {
+              "id": 227,
+              "title": "بیمه درمان تکمیلی",
+              "titleFa": "بیمه درمان تکمیلی",
+              "titleEn": "Health insurance\r\n"
+            },
+            {
+              "id": 230,
+              "title": "ساعت کاری منعطف",
+              "titleFa": "ساعت کاری منعطف",
+              "titleEn": "Flexible working hours\r\n"
+            },
+            {
+              "id": 232,
+              "title": "اتاق بازی",
+              "titleFa": "اتاق بازی",
+              "titleEn": "Game room\r\n"
+            },
+            {
+              "id": 236,
+              "title": "امکانات ورزشی",
+              "titleFa": "امکانات ورزشی",
+              "titleEn": "Gym facilities\r\n"
+            },
+            {
+              "id": 237,
+              "title": "فضای استراحت",
+              "titleFa": "فضای استراحت",
+              "titleEn": "Resting space\r\n"
+            },
+            {
+              "id": 238,
+              "title": "کافی شاپ",
+              "titleFa": "کافی شاپ",
+              "titleEn": "Coffee shop\r\n"
+            },
+            {
+              "id": 239,
+              "title": "پزشک سازمانی",
+              "titleFa": "پزشک سازمانی",
+              "titleEn": "In-house Medical doctor\r\n"
+            },
+            {
+              "id": 244,
+              "title": "بسته ها و هدایای مناسبتی",
+              "titleFa": "بسته ها و هدایای مناسبتی",
+              "titleEn": "Occasional packages and gifts\r\n"
+            }
+          ],
+          "workType": {
+            "id": 120,
+            "title": null,
+            "titleFa": "تمام وقت",
+            "titleEn": "Full Time"
+          },
+          "seniorityLevel": {
+            "id": 97,
+            "title": null,
+            "titleFa": "کارشناس",
+            "titleEn": "Specialist"
+          },
+          "salary": null,
+          "industry": {
+            "id": 65,
+            "title": "بازاریابی و تبلیغات",
+            "titleFa": "بازاریابی و تبلیغات",
+            "titleEn": "Marketing / Advertising"
+          },
+          "gender": {
+            "id": 133,
+            "title": null,
+            "titleFa": "تفاوتی ندارد",
+            "titleEn": "Men / Women"
+          },
+          "labels": [],
+          "firstActivationTime": {
+            "beautifyFa": "13 روز پیش",
+            "beautifyEn": "13 days ago",
+            "date": "2026-10-05T16:10:43Z"
+          },
+          "activationTime": {
+            "passedDays": 13,
+            "beautifyFa": "13 روز پیش",
+            "beautifyEn": "13 days ago",
+            "date": "2026-10-05T16:10:43Z"
+          },
+          "expireTime": {
+            "daysLeftUntil": 47,
+            "isExpired": false,
+            "beautifyFa": "دیروز",
+            "beautifyEn": "Yesterday",
+            "date": "2026-12-04T16:10:43Z"
+          }
+        },
+        {
+          "score": 0.7335954904556274,
+          "itemIndex": 18,
+          "searchPositionCoefficient": 0.46,
+          "labelDetails": [
+            {
+              "title": "امکان دورکاری",
+              "type": 2
+            }
+          ],
+          "id": 1535897,
+          "title": "AI Engineer (LLM)",
+          "isPersian": true,
+          "userJobPostInfo": {
+            "matchingScore": 0,
+            "isSuitableForCandidate": false,
+            "isBookmarked": false,
+            "isApplied": false,
+            "isCanceledApply": false,
+            "isAppliedAsVip": false,
+            "hasHighChanceBadge": null
+          },
+          "properties": {
+            "isInternship": false,
+            "isRemote": true,
+            "isUrgent": true,
+            "requiredRelatedExperienceYears": 1,
+            "suitableForDisabled": false,
+            "salaryCanBeShown": true,
+            "isCheckingResumes": true,
+            "typeId": 1,
+            "linkOutAddress": null,
+            "isBlueCollarJob": false
+          },
+          "company": {
+            "id": 279847,
+            "nameFa": "ستاپ ترک",
+            "nameEn": "SetupTrack",
+            "hasPicture": true,
+            "logoFileId": 40032398,
+            "logoUrl": "https://fileapi.jobvision.ir/api/v1.0/files/getimage?fileid=40032398&width=50&height=50",
+            "pageUrl": "/companies/279847/استخدام-ستاپ-ترک",
+            "isEmployerResponsive": true,
+            "isFamous": false,
+            "isGovernmentalCompany": false,
+            "companyScore": 0
+          },
+          "location": {
+            "country": {
+              "id": 1,
+              "title": null,
+              "titleFa": "ایران",
+              "titleEn": "Iran"
+            },
+            "province": {
+              "urlTitle": "all-cities-of-tehran",
+              "id": 17,
+              "title": "تهران",
+              "titleFa": "تهران",
+              "titleEn": "Tehran"
+            },
+            "city": {
+              "citySize": 4,
+              "citySizeGroupId": 1,
+              "province": null,
+              "urlTitle": "tehran",
+              "id": 320,
+              "title": null,
+              "titleFa": "تهران",
+              "titleEn": "Tehran"
+            },
+            "regionGroup": {
+              "id": 1,
+              "title": null,
+              "titleFa": "شمال",
+              "titleEn": "North"
+            },
+            "region": {
+              "id": 307,
+              "title": null,
+              "titleFa": "ونک",
+              "titleEn": "Vanak"
+            }
+          },
+          "jobCategories": [
+            {
+              "id": 260,
+              "title": null,
+              "titleFa": "علوم داده / هوش مصنوعی",
+              "titleEn": "Data Science / AI"
+            }
+          ],
+          "benefits": [
+            {
+              "id": 230,
+              "title": "ساعت کاری منعطف",
+              "titleFa": "ساعت کاری منعطف",
+              "titleEn": "Flexible working hours\r\n"
+            }
+          ],
+          "workType": {
+            "id": 122,
+            "title": null,
+            "titleFa": "قراردادی / پروژه ای",
+            "titleEn": "Project - based"
+          },
+          "seniorityLevel": {
+            "id": 97,
+            "title": null,
+            "titleFa": "کارشناس",
+            "titleEn": "Specialist"
+          },
+          "salary": {
+            "id": 0,
+            "title": null,
+            "titleFa": "50 - 100 میلیون تومان",
+            "titleEn": "50 - 100 Million Tomans",
+            "max": 100,
+            "min": 50
+          },
+          "industry": {
+            "id": 38,
+            "title": "سرمایه گذاری و مالی",
+            "titleFa": "سرمایه گذاری و مالی",
+            "titleEn": "Finance / Investment"
+          },
+          "gender": {
+            "id": 133,
+            "title": null,
+            "titleFa": "تفاوتی ندارد",
+            "titleEn": "Men / Women"
+          },
+          "labels": [
+            "امکان دورکاری"
+          ],
+          "firstActivationTime": {
+            "beautifyFa": "5 روز پیش",
+            "beautifyEn": "5 days ago",
+            "date": "2026-10-13T20:30:54Z"
+          },
+          "activationTime": {
+            "passedDays": 5,
+            "beautifyFa": "5 روز پیش",
+            "beautifyEn": "5 days ago",
+            "date": "2026-10-13T20:30:54Z"
+          },
+          "expireTime": {
+            "daysLeftUntil": 35,
+            "isExpired": false,
+            "beautifyFa": "دیروز",
+            "beautifyEn": "Yesterday",
+            "date": "2026-11-22T20:30:53Z"
+          }
+        },
+        {
+          "score": 0.7400110960006714,
+          "itemIndex": 23,
+          "searchPositionCoefficient": 1,
+          "labelDetails": [],
+          "id": 1566821,
+          "title": "کارشناس بینایی ماشین و پردازش تصویر",
+          "isPersian": true,
+          "userJobPostInfo": {
+            "matchingScore": 0,
+            "isSuitableForCandidate": false,
+            "isBookmarked": false,
+            "isApplied": false,
+            "isCanceledApply": false,
+            "isAppliedAsVip": false,
+            "hasHighChanceBadge": null
+          },
+          "properties": {
+            "isInternship": false,
+            "isRemote": false,
+            "isUrgent": false,
+            "requiredRelatedExperienceYears": 2,
+            "suitableForDisabled": false,
+            "salaryCanBeShown": true,
+            "isCheckingResumes": false,
+            "typeId": 1,
+            "linkOutAddress": null,
+            "isBlueCollarJob": false
+          },
+          "company": {
+            "id": 0,
+            "nameFa": "سازمانی فعال در حوزه تولیدی / صنعتی",
+            "nameEn": "سازمانی فعال در حوزه تولیدی / صنعتی",
+            "hasPicture": false,
+            "logoFileId": null,
+            "logoUrl": "https://fileapi.jobvision.ir/StaticFiles/Employer/DefaultImages/default-companyLogo.png?v=20251022",
+            "pageUrl": "/companies",
+            "isEmployerResponsive": false,
+            "isFamous": false,
+            "isGovernmentalCompany": false,
+            "companyScore": null
+          },
+          "location": {
+            "country": {
+              "id": 1,
+              "title": null,
+              "titleFa": "ایران",
+              "titleEn": "Iran"
+            },
+            "province": {
+              "urlTitle": "all-cities-of-tehran",
+              "id": 17,
+              "title": "تهران",
+              "titleFa": "تهران",
+              "titleEn": "Tehran"
+            },
+            "city": {
+              "citySize": 4,
+              "citySizeGroupId": 1,
+              "province": null,
+              "urlTitle": "tehran",
+              "id": 320,
+              "title": null,
+              "titleFa": "تهران",
+              "titleEn": "Tehran"
+            },
+            "regionGroup": {
+              "id": 6,
+              "title": null,
+              "titleFa": "شمال غربی",
+              "titleEn": "North West"
+            },
+            "region": {
+              "id": 206,
+              "title": null,
+              "titleFa": "شهرک کوهسار",
+              "titleEn": "Shahrak Kohsar"
+            }
+          },
+          "jobCategories": [
+            {
+              "id": 30,
+              "title": null,
+              "titleFa": "توسعه نرم افزار و برنامه نویسی",
+              "titleEn": "IT - Software Development (Web,Moblie,…)"
+            },
+            {
+              "id": 260,
+              "title": null,
+              "titleFa": "علوم داده / هوش مصنوعی",
+              "titleEn": "Data Science / AI"
+            }
+          ],
+          "benefits": [
+            {
+              "id": 117,
+              "title": "پاداش",
+              "titleFa": "پاداش",
+              "titleEn": "Bonus"
+            },
+            {
+              "id": 234,
+              "title": "ناهار",
+              "titleFa": "ناهار",
+              "titleEn": "Lunch\r\n"
+            }
+          ],
+          "workType": {
+            "id": 120,
+            "title": null,
+            "titleFa": "تمام وقت",
+            "titleEn": "Full Time"
+          },
+          "seniorityLevel": {
+            "id": 97,
+            "title": null,
+            "titleFa": "کارشناس",
+            "titleEn": "Specialist"
+          },
+          "salary": {
+            "id": 0,
+            "title": null,
+            "titleFa": "40 - 50 میلیون تومان",
+            "titleEn": "40 - 50 Million Tomans",
+            "max": 50,
+            "min": 40
+          },
+          "industry": {
+            "id": 54,
+            "title": "تولیدی / صنعتی",
+            "titleFa": "تولیدی / صنعتی",
+            "titleEn": "Manufacturing & Production"
+          },
+          "gender": {
+            "id": 133,
+            "title": null,
+            "titleFa": "تفاوتی ندارد",
+            "titleEn": "Men / Women"
+          },
+          "labels": [],
+          "firstActivationTime": {
+            "beautifyFa": "4 روز پیش",
+            "beautifyEn": "4 days ago",
+            "date": "2026-10-14T09:58:47Z"
+          },
+          "activationTime": {
+            "passedDays": 4,
+            "beautifyFa": "4 روز پیش",
+            "beautifyEn": "4 days ago",
+            "date": "2026-10-14T09:58:47Z"
+          },
+          "expireTime": {
+            "daysLeftUntil": 56,
+            "isExpired": false,
+            "beautifyFa": "دیروز",
+            "beautifyEn": "Yesterday",
+            "date": "2026-12-13T09:58:47Z"
+          }
+        }
+      ],
+      "filters": {
+        "keyword": "ai",
+        "jobCategory": null,
+        "locationWrapper": null,
+        "workExperiences": null,
+        "salaries": null,
+        "workTypes": null,
+        "seniorityLevels": null,
+        "jobPostPublishTime": null,
+        "industries": null,
+        "company": null,
+        "benefits": null,
+        "remote": false
+      },
+      "searchId": "392791869888907520",
+      "jobPostCount": 2922,
+      "hasSalaryHistogram": false
+    }
+  }
+}
