@@ -12,3 +12,6 @@ data/*
 !data/.gitkeep
 .venv/
 
+# Personal resume data (Phase 2): never commit.
+config/master_resume.yaml
+inputs/

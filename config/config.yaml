@@ -20,3 +20,33 @@ search_profiles:
         remote_only: false   # Mashhad: accept on-site, hybrid, and remote
       - city: "ALL"
         remote_only: true    # Any other or unknown city: accept REMOTE only
+
+# ── Phase 2: resume tailoring ──────────────────────────────────────────────
+# Remove the whole `llm` section to disable resume tailoring and the review bot.
+llm:
+  provider: "gemini"           # the only provider for now; "openai" and "openrouter" are planned
+  # Source: https://ai.google.dev/gemini-api/docs/models (checked 2026-10-18):
+  # Gemini 3.8 Flash, a stable (generally available) Flash model.
+  model: "gemini-3.8-flash"
+  temperature: 0.3             # 0 to 2
+  max_output_tokens: 8192
+  timeout_seconds: 120
+
+tailoring:
+  master_resume_path: "config/master_resume.yaml"
+  output_dir: "data/resumes"
+  cover_letter: true
+  max_versions_per_job: 3      # the first version plus up to two regenerations
+  persian_ratio_threshold: 0.3 # share of Persian letters in a job's text that selects a Persian resume
+
+bot:
+  poll_timeout_seconds: 30     # Telegram getUpdates long-poll timeout
+  state_path: "data/bot_state.json"
+
+# ── Phase 3: application submission ───────────────────────────────────────
+apply:
+  enabled: false
+  daily_limit: 10
+  confirm_before_submit: false
+  confirm_timeout_minutes: 30
+  screenshots_dir: "data/applications"

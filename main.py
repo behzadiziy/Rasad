@@ -12,13 +12,21 @@ Setup and run (from the project root):
 Modes (one is required):
     --once            Run the pipeline once and exit (for cron or systemd timers).
     --daemon          Run on the schedule in `config/config.yaml` until SIGINT/SIGTERM.
+    --reevaluate      Re-check stored IGNORED jobs against the current profiles,
+                      requeue the ones that match now, and send them. Never
+                      launches a browser.
 Options:
     --headful         Show the browser window (overrides HEADLESS in config/.env).
     --debug-capture   Save intercepted JSON and HTML under `data/debug/`.
+    --since-days N    With --reevaluate: only jobs first seen in the last N days (default 30).
+    --dry-run         With --reevaluate: print the candidates and change nothing.
 
-`--once` exit codes: 0 = success; 1 = fatal error (settings, config, database);
-2 = finished with problems (a platform failed or notifications are still pending);
-130 = interrupted.
+    uv run python main.py --reevaluate --dry-run    # preview after editing the profiles
+    uv run python main.py --reevaluate              # requeue and notify
+
+`--once` and `--reevaluate` exit codes: 0 = success; 1 = fatal error
+(settings, config, database); 2 = finished with problems (a platform failed or
+notifications are still pending); 130 = interrupted.
 
 Logs go to the console (INFO) and to `data/logs/job_hunter.log` (DEBUG, rotated
 at 10 MB, kept for 14 days).
@@ -32,10 +40,11 @@ import logging
 import signal
 import sys
 import time
-from collections.abc import Callable
+import unicodedata
+from collections.abc import Callable, Sequence
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from datetime import time as dt_time
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -74,6 +83,10 @@ _MAX_CONSECUTIVE_SEND_FAILURES = 3
 _SHUTDOWN_GRACE_S = 60.0
 _CANCEL_CLEANUP_TIMEOUT_S = 30.0
 _SCHEDULER_JOB_ID = "job_hunter_pipeline"
+
+_DEFAULT_SINCE_DAYS = 30
+# Display width of the title column in the --reevaluate --dry-run table.
+_TABLE_TITLE_MAX = 60
 
 _EXIT_OK = 0
 _EXIT_FATAL = 1
@@ -731,6 +744,196 @@ async def _run_daemon(settings: Settings, config: AppConfig, *, headful: bool, d
     return await _Daemon(settings, config, headful=headful, debug_capture=debug_capture).run()
 
 
+# ── --reevaluate ───────────────────────────────────────────────────────────
+
+
+@dataclass(slots=True)
+class _ReevaluationSummary:
+    """Counters for one `--reevaluate` run.
+
+    Attributes:
+        checked: `IGNORED` jobs in the window that were re-checked.
+        candidates: Jobs among them that match at least one profile now.
+        requeued: Candidates moved back to `NEW` (always 0 in a dry run).
+        notified: Notifications delivered by the notification stage.
+        failed: Notifications that failed; those jobs stay `NEW`.
+        deferred: `NEW` jobs not attempted (notifier unavailable or too many
+            consecutive failures); they stay `NEW`.
+    """
+
+    checked: int = 0
+    candidates: int = 0
+    requeued: int = 0
+    notified: int = 0
+    failed: int = 0
+    deferred: int = 0
+
+    @property
+    def has_problems(self) -> bool:
+        """Return True if some notifications are still pending."""
+        return bool(self.failed or self.deferred)
+
+
+def plan_reevaluation(jobs: Sequence[JobPost], engine: RuleEngine) -> list[tuple[JobPost, list[str]]]:
+    """Return the `IGNORED` jobs that match at least one profile now, with the matched profile names.
+
+    A pure function: it reads nothing and changes nothing. Jobs with any other
+    status are skipped, and the input order is kept.
+    """
+    plan: list[tuple[JobPost, list[str]]] = []
+    for job in jobs:
+        if job.status != JobStatus.IGNORED:
+            continue
+        matched = engine.match_profiles(job)
+        if matched:
+            plan.append((job, matched))
+    return plan
+
+
+def _display_width(text: str) -> int:
+    """Return the terminal width of `text`: zero-width marks and joiners (such as ZWNJ) count 0, wide characters 2."""
+    width = 0
+    for char in text:
+        if unicodedata.category(char) in ("Mn", "Me", "Cf"):
+            continue
+        width += 2 if unicodedata.east_asian_width(char) in ("W", "F") else 1
+    return width
+
+
+def _fit(text: str, width: int) -> str:
+    """Truncate `text` to `width` display columns (adding "…") and pad it with spaces to exactly `width`."""
+    text = " ".join(text.split())
+    if _display_width(text) > width:
+        while text and _display_width(text) > width - 1:
+            text = text[:-1]
+        text = text.rstrip() + "…"
+    return text + " " * (width - _display_width(text))
+
+
+def _format_reevaluation_table(plan: Sequence[tuple[JobPost, list[str]]]) -> str:
+    """Render the dry-run candidates as a plain-text table: platform, ID, title, matched profiles."""
+    rows = [
+        (job.platform, job.external_id, " ".join(job.title.split()), ", ".join(matched)) for job, matched in plan
+    ]
+    headers = ("Platform", "ID", "Title", "Matched profiles")
+    widths = [
+        max([_display_width(header)] + [_display_width(row[index]) for row in rows])
+        for index, header in enumerate(headers)
+    ]
+    widths[2] = min(widths[2], _TABLE_TITLE_MAX)
+    lines = [
+        "  ".join(_fit(cell, width) for cell, width in zip(headers, widths, strict=True)).rstrip(),
+        "  ".join("-" * width for width in widths),
+    ]
+    lines.extend(
+        "  ".join(_fit(cell, width) for cell, width in zip(row, widths, strict=True)).rstrip() for row in rows
+    )
+    return "\n".join(lines)
+
+
+async def _reevaluate(
+    settings: Settings,
+    config: AppConfig,
+    *,
+    since_days: int,
+    dry_run: bool,
+) -> _ReevaluationSummary:
+    """Re-check `IGNORED` jobs first seen in the last `since_days` days against the current profiles.
+
+    Steps:
+    1. Open the database and apply pending migrations (this happens in a dry
+       run too; migrations never change job rows).
+    2. Load the `IGNORED` jobs in the window and run `plan_reevaluation`.
+    3. Dry run: print the candidates as a table and stop; nothing is changed or sent.
+    4. Otherwise: requeue each candidate as `NEW` (`requeue_ignored`), then run
+       the same notification stage as `--once`, which sends every `NEW` job.
+
+    Never launches a browser.
+    """
+    started = time.monotonic()
+    since = datetime.now(UTC) - timedelta(days=since_days)
+    summary = _ReevaluationSummary()
+    outcome = "failed"
+    logger.info(
+        "Re-evaluation started{}: IGNORED jobs first seen in the last {} day(s) (since {:%Y-%m-%d %H:%M} UTC)",
+        " (dry run)" if dry_run else "",
+        since_days,
+        since,
+    )
+    try:
+        rule_engine = RuleEngine(config)
+        async with Database(settings.DB_PATH) as db:
+            await db.init_db()
+            ignored = await db.get_jobs_by_status(JobStatus.IGNORED, since=since)
+            summary.checked = len(ignored)
+            plan = plan_reevaluation(ignored, rule_engine)
+            summary.candidates = len(plan)
+            logger.info("{} IGNORED job(s) checked; {} match the current profiles", summary.checked, len(plan))
+
+            if dry_run:
+                if plan:
+                    print(f"\n{len(plan)} IGNORED job(s) would be requeued as NEW and notified:\n")
+                    print(_format_reevaluation_table(plan))
+                    print()
+                else:
+                    print("\nNo IGNORED job in the window matches the current profiles.\n")
+                outcome = "finished (dry run: nothing changed, nothing sent)"
+                return summary
+
+            for job, matched in plan:
+                if await db.requeue_ignored(job.platform, job.external_id, matched):
+                    summary.requeued += 1
+                    logger.info(
+                        "[{}] Requeued {}: {} | {} | profiles: {}",
+                        job.platform,
+                        job.external_id,
+                        job.title,
+                        job.company or "-",
+                        ", ".join(matched),
+                    )
+
+            progress = _RunProgress(started=started, stage="notifying")
+            platform_summaries: dict[Platform, PlatformSummary] = {}
+            await _notify_pending(db, settings, platform_summaries, progress)
+            summary.notified = sum(item.notified for item in platform_summaries.values())
+            summary.failed = sum(item.failed for item in platform_summaries.values())
+            summary.deferred = sum(item.deferred for item in platform_summaries.values())
+        outcome = "finished"
+    except asyncio.CancelledError:
+        outcome = "cancelled"
+        raise
+    finally:
+        text = (
+            f"checked {summary.checked} | requeued {summary.requeued} | "
+            f"notified {summary.notified} | failed {summary.failed}"
+        )
+        if dry_run:
+            text += f" | would requeue {summary.candidates}"
+        if summary.deferred:
+            text += f" | deferred {summary.deferred}"
+        logger.info("Re-evaluation {} in {}: {}", outcome, _format_duration(time.monotonic() - started), text)
+    return summary
+
+
+async def _run_reevaluate(settings: Settings, config: AppConfig, *, since_days: int, dry_run: bool) -> int:
+    """Run `--reevaluate` and return the process exit code (the same codes as `--once`)."""
+    task = asyncio.current_task()
+    remove_handler = _add_signal_handler(signal.SIGTERM, task.cancel) if task is not None else (lambda: None)
+    try:
+        summary = await _reevaluate(settings, config, since_days=since_days, dry_run=dry_run)
+    except asyncio.CancelledError:
+        if task is not None:
+            task.uncancel()
+        logger.warning("Re-evaluation interrupted; cleanup finished")
+        return _EXIT_INTERRUPTED
+    except Exception:
+        logger.exception("Re-evaluation failed")
+        return _EXIT_FATAL
+    finally:
+        remove_handler()
+    return _EXIT_PARTIAL if summary.has_problems else _EXIT_OK
+
+
 # ── Logging and CLI ────────────────────────────────────────────────────────
 
 
@@ -777,6 +980,17 @@ def _configure_logging() -> None:
     logging.getLogger("apscheduler").setLevel(logging.WARNING)
 
 
+def _positive_int(value: str) -> int:
+    """argparse type: a positive integer."""
+    try:
+        number = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"must be a positive integer, got {value!r}") from None
+    if number < 1:
+        raise argparse.ArgumentTypeError(f"must be a positive integer, got {value!r}")
+    return number
+
+
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     """Parse the command-line arguments."""
     parser = argparse.ArgumentParser(
@@ -786,11 +1000,34 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--once", action="store_true", help="run the pipeline once and exit")
     mode.add_argument("--daemon", action="store_true", help="run continuously on the configured schedule")
+    mode.add_argument(
+        "--reevaluate",
+        action="store_true",
+        help="re-check stored IGNORED jobs against the current profiles, requeue matches, and notify them",
+    )
     parser.add_argument("--headful", action="store_true", help="show the browser window (overrides HEADLESS)")
     parser.add_argument(
         "--debug-capture", action="store_true", help="save intercepted JSON and HTML under data/debug/"
     )
-    return parser.parse_args(argv)
+    parser.add_argument(
+        "--since-days",
+        type=_positive_int,
+        default=None,
+        metavar="N",
+        help=f"with --reevaluate: only jobs first seen in the last N days (default {_DEFAULT_SINCE_DAYS})",
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true", help="with --reevaluate: print the candidates and change nothing"
+    )
+    args = parser.parse_args(argv)
+    if not args.reevaluate:
+        if args.since_days is not None:
+            parser.error("--since-days requires --reevaluate")
+        if args.dry_run:
+            parser.error("--dry-run requires --reevaluate")
+    if args.since_days is None:
+        args.since_days = _DEFAULT_SINCE_DAYS
+    return args
 
 
 def _load_settings() -> Settings | None:
@@ -825,8 +1062,12 @@ def main(argv: list[str] | None = None) -> int:
         logger.error("Cannot load {}: {}", _CONFIG_PATH, exc)
         return _EXIT_FATAL
 
-    runner = _run_daemon if args.daemon else _run_once
     try:
+        if args.reevaluate:
+            return asyncio.run(
+                _run_reevaluate(settings, config, since_days=args.since_days, dry_run=args.dry_run)
+            )
+        runner = _run_daemon if args.daemon else _run_once
         return asyncio.run(runner(settings, config, headful=args.headful, debug_capture=args.debug_capture))
     except KeyboardInterrupt:
         logger.warning("Interrupted")
