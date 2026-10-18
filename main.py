@@ -12,17 +12,19 @@ Setup and run (from the project root):
 Modes (one is required):
     --once            Run the pipeline once and exit (for cron or systemd timers).
     --daemon          Run on the schedule in `config/config.yaml` until SIGINT/SIGTERM.
-    --reevaluate      Re-check stored IGNORED jobs against the current profiles,
-                      requeue the ones that match now, and send them. Never
-                      launches a browser.
+    --reevaluate      Re-check stored jobs against the current profiles: requeue
+                      IGNORED jobs that match now, demote unsent NEW jobs that
+                      no longer match, report sent jobs that no longer match,
+                      recompute duplicate groups, then send the NEW jobs.
+                      Never launches a browser.
 Options:
     --headful         Show the browser window (overrides HEADLESS in config/.env).
     --debug-capture   Save intercepted JSON and HTML under `data/debug/`.
     --since-days N    With --reevaluate: only jobs first seen in the last N days (default 30).
-    --dry-run         With --reevaluate: print the candidates and change nothing.
+    --dry-run         With --reevaluate: print what would change and change nothing.
 
     uv run python main.py --reevaluate --dry-run    # preview after editing the profiles
-    uv run python main.py --reevaluate              # requeue and notify
+    uv run python main.py --reevaluate              # apply the changes and notify
 
 `--once` and `--reevaluate` exit codes: 0 = success; 1 = fatal error
 (settings, config, database); 2 = finished with problems (a platform failed or
@@ -41,6 +43,7 @@ import signal
 import sys
 import time
 import unicodedata
+from collections import defaultdict
 from collections.abc import Callable, Sequence
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
@@ -58,6 +61,7 @@ from playwright.async_api import Error as PlaywrightError
 from pydantic import ValidationError
 
 from src.database import Database
+from src.duplicates import assign_duplicate_groups
 from src.models import AppConfig, JobPost, JobStatus, Platform, Settings, load_app_config
 from src.notifier.telegram import TelegramNotifier
 from src.rule_engine import RuleEngine
@@ -85,8 +89,16 @@ _CANCEL_CLEANUP_TIMEOUT_S = 30.0
 _SCHEDULER_JOB_ID = "job_hunter_pipeline"
 
 _DEFAULT_SINCE_DAYS = 30
-# Display width of the title column in the --reevaluate --dry-run table.
+# Display width caps of the long columns in the --reevaluate --dry-run tables.
 _TABLE_TITLE_MAX = 60
+_TABLE_COMPANY_MAX = 40  # room for bilingual names such as "گروه حقوق آسیا | Asia Law Group"
+_TABLE_COLUMN_MAX: dict[str, int] = {"Title": _TABLE_TITLE_MAX, "Company": _TABLE_COMPANY_MAX}
+
+# The --reevaluate --dry-run section titles.
+_SECTION_ADDED = "اضافه می‌شوند"
+_SECTION_REMOVED = "حذف می‌شوند"
+_SECTION_REPORT_ONLY = "دیگر تطبیق ندارند (فقط گزارش)"
+_SECTION_GROUPS = "گروه‌های تکراری"
 
 _EXIT_OK = 0
 _EXIT_FATAL = 1
@@ -106,6 +118,7 @@ class PlatformSummary:
         known: Listings skipped as already stored, without visiting their detail page.
         new: Jobs saved as `NEW` (matched at least one profile).
         ignored: Jobs saved as `IGNORED` (matched no profile).
+        duplicates: Jobs saved in a probable-duplicate group (any status).
         notified: Notifications delivered; those jobs are now `NOTIFIED`.
         failed: Notifications that failed; those jobs stay `NEW`.
         deferred: `NEW` jobs not attempted this run (notifier unavailable or
@@ -117,6 +130,7 @@ class PlatformSummary:
     known: int = 0
     new: int = 0
     ignored: int = 0
+    duplicates: int = 0
     notified: int = 0
     failed: int = 0
     deferred: int = 0
@@ -128,6 +142,8 @@ class PlatformSummary:
             f"scraped {self.scraped} | new {self.new} | ignored {self.ignored} | "
             f"notified {self.notified} | failed {self.failed} | known (skipped) {self.known}"
         )
+        if self.duplicates:
+            text += f" | probable duplicates {self.duplicates}"
         if self.deferred:
             text += f" | deferred {self.deferred}"
         if self.error:
@@ -184,15 +200,17 @@ async def _heartbeat(progress: _RunProgress, summaries: dict[Platform, PlatformS
 
 
 def _collect_keywords(config: AppConfig) -> list[str]:
-    """Return the union of all profiles' keywords, in config order.
+    """Return the union of all profiles' search terms, in config order.
 
-    Keywords that are equal after `normalize_text` (e.g. "AI" and "ai") are
+    Synonym groups are flattened: every term of every group is searched.
+    Terms that are equal after `normalize_text` (e.g. "AI" and "ai") are
     searched once, using the first spelling.
     """
     keywords: dict[str, str] = {}
     for profile in config.search_profiles:
-        for keyword in profile.keywords:
-            keywords.setdefault(normalize_text(keyword), keyword.strip())
+        for group in profile.keywords:
+            for keyword in [group] if isinstance(group, str) else group:
+                keywords.setdefault(normalize_text(keyword), keyword.strip())
     return list(keywords.values())
 
 
@@ -318,30 +336,80 @@ async def _scrape_all(
                 summaries[platform].error = type(exc).__name__
 
 
+async def _load_grouping_context(db: Database, since: datetime) -> list[JobPost]:
+    """Return the jobs stored since `since`, plus every other member of their duplicate groups.
+
+    Loading whole groups keeps each group's earliest member, which names the
+    group, in view even when it was first seen before `since`.
+    """
+    jobs = await db.get_jobs_since(since)
+    known = {(job.platform, job.external_id) for job in jobs}
+    for group in sorted({job.duplicate_group for job in jobs if job.duplicate_group}):
+        for member in await db.get_duplicate_group_members(group):
+            key = (member.platform, member.external_id)
+            if key not in known:
+                known.add(key)
+                jobs.append(member)
+    return jobs
+
+
+async def _group_new_jobs(db: Database, config: AppConfig, jobs: list[JobPost]) -> dict[tuple[str, str], str]:
+    """Return the duplicate-group changes for this run's jobs and the stored jobs they may duplicate.
+
+    Stored jobs first seen up to `duplicates.window_days` before the earliest
+    new job are compared. A failure is logged, and the jobs are then saved
+    without groups instead of being lost.
+    """
+    if not jobs:
+        return {}
+    since = min(job.created_at for job in jobs) - timedelta(days=config.duplicates.window_days)
+    try:
+        existing = await _load_grouping_context(db, since)
+        return _changes_in_groups_of(jobs, assign_duplicate_groups(jobs, existing, config))
+    except Exception:
+        logger.exception("Duplicate grouping failed; this run's jobs are saved without duplicate groups")
+        return {}
+
+
 async def _save_jobs(
     db: Database,
     rule_engine: RuleEngine,
+    config: AppConfig,
     jobs: list[JobPost],
     summaries: dict[Platform, PlatformSummary],
 ) -> None:
-    """Deduplicate jobs, match them against the profiles, and save them as NEW or IGNORED."""
+    """Deduplicate jobs by key, match them against the profiles, group probable duplicates, and save them.
+
+    Matching jobs are saved as NEW and the others as IGNORED. Before saving,
+    this run's jobs are grouped with the stored jobs they probably duplicate
+    (`assign_duplicate_groups`): new jobs are saved with their group, and
+    stored jobs that joined a group are updated.
+    """
     unique: dict[tuple[str, str], JobPost] = {}
     for job in jobs:
         unique.setdefault((job.platform, job.external_id), job)
     if len(unique) < len(jobs):
-        logger.info("Dropped {} duplicate job(s)", len(jobs) - len(unique))
+        logger.info("Dropped {} repeated listing(s) with the same platform and ID", len(jobs) - len(unique))
 
-    saved_new = saved_ignored = 0
+    evaluated: list[JobPost] = []
     for job in unique.values():
         matched = rule_engine.match_profiles(job)
         if matched:
-            job = job.model_copy(update={"matched_profiles": matched, "status": JobStatus.NEW})
+            evaluated.append(job.model_copy(update={"matched_profiles": matched, "status": JobStatus.NEW}))
         else:
-            job = job.model_copy(update={"status": JobStatus.IGNORED})
+            evaluated.append(job.model_copy(update={"status": JobStatus.IGNORED}))
+
+    groups = await _group_new_jobs(db, config, evaluated)
+
+    saved_new = saved_ignored = saved_grouped = 0
+    for job in evaluated:
+        key = (job.platform, job.external_id)
+        if key in groups:
+            job = job.model_copy(update={"duplicate_group": groups[key]})
         if not await db.save_job(job):
             continue
         summary = summaries.setdefault(job.platform, PlatformSummary())
-        if matched:
+        if job.status == JobStatus.NEW:
             summary.new += 1
             saved_new += 1
             logger.info(
@@ -350,12 +418,48 @@ async def _save_jobs(
                 job.external_id,
                 job.title,
                 job.company or "-",
-                ", ".join(matched),
+                ", ".join(job.matched_profiles),
             )
         else:
             summary.ignored += 1
             saved_ignored += 1
-    logger.info("Saved {} job(s): {} NEW, {} IGNORED", saved_new + saved_ignored, saved_new, saved_ignored)
+        if job.duplicate_group is not None:
+            summary.duplicates += 1
+            saved_grouped += 1
+            logger.log(
+                "INFO" if job.status == JobStatus.NEW else "DEBUG",
+                "[{}] Probable duplicate {} ({}): {} | {} | group {}",
+                job.platform,
+                job.external_id,
+                job.status.value,
+                job.title,
+                job.company or "-",
+                job.duplicate_group,
+            )
+
+    joined = 0
+    for (platform, external_id), group in groups.items():
+        if (platform, external_id) in unique:
+            continue
+        await db.set_duplicate_group(platform, external_id, group)
+        joined += 1
+        logger.info("[{}] Stored job {} joined duplicate group {}", platform, external_id, group)
+    logger.info(
+        "Saved {} job(s): {} NEW, {} IGNORED; {} in a duplicate group, {} stored job(s) joined a group",
+        saved_new + saved_ignored,
+        saved_new,
+        saved_ignored,
+        saved_grouped,
+        joined,
+    )
+
+
+async def _other_group_members(db: Database, job: JobPost) -> list[JobPost]:
+    """Return the other members of the job's duplicate group (any status); [] when it has no group."""
+    if job.duplicate_group is None:
+        return []
+    members = await db.get_duplicate_group_members(job.duplicate_group)
+    return [member for member in members if (member.platform, member.external_id) != (job.platform, job.external_id)]
 
 
 async def _notify_pending(
@@ -364,7 +468,10 @@ async def _notify_pending(
     summaries: dict[Platform, PlatformSummary],
     progress: _RunProgress,
 ) -> None:
-    """Send every NEW job; delivered jobs become NOTIFIED, the others stay NEW for the next run."""
+    """Send every NEW job; delivered jobs become NOTIFIED, the others stay NEW for the next run.
+
+    A job in a duplicate group is sent with links to the group's other postings.
+    """
     pending = await db.get_pending_notifications()
     if not pending:
         logger.info("No pending notifications")
@@ -384,7 +491,8 @@ async def _notify_pending(
         for index, job in enumerate(pending, start=1):
             progress.stage = f"notifying ({index}/{len(pending)})"
             summary = summaries.setdefault(job.platform, PlatformSummary())
-            if await notifier.send_job(job):
+            duplicates = await _other_group_members(db, job)
+            if await notifier.send_job(job, duplicates=duplicates):
                 await db.update_status(job.platform, job.external_id, JobStatus.NOTIFIED)
                 summary.notified += 1
                 consecutive_failures = 0
@@ -426,8 +534,10 @@ async def run_pipeline(
        and run each enabled platform's scraper in turn; per-platform failures
        are logged and do not stop the other platforms.
     3. Deduplicate jobs by `(platform, external_id)`, match them against the
-       profiles, and save them as `NEW` (matched) or `IGNORED`.
-    4. Send every `NEW` job to Telegram; delivered jobs become `NOTIFIED`.
+       profiles, group probable duplicates with the stored jobs, and save
+       them as `NEW` (matched) or `IGNORED`.
+    4. Send every `NEW` job to Telegram, with links to its probable
+       duplicates; delivered jobs become `NOTIFIED`.
 
     If the run is cancelled while scraping, the jobs of platforms that already
     finished are still saved before the cancellation propagates.
@@ -482,12 +592,12 @@ async def run_pipeline(
                     logger.warning(
                         "Run cancelled while scraping; saving {} job(s) from finished platforms", len(collected)
                     )
-                    await _save_jobs(db, rule_engine, collected, summaries)
+                    await _save_jobs(db, rule_engine, config, collected, summaries)
                 raise
 
             logger.info("Stage 3/4: filtering and saving {} job(s)", len(collected))
             progress.stage = "filtering and saving"
-            await _save_jobs(db, rule_engine, collected, summaries)
+            await _save_jobs(db, rule_engine, config, collected, summaries)
 
             logger.info("Stage 4/4: notifications")
             progress.stage = "notifying"
@@ -752,18 +862,30 @@ class _ReevaluationSummary:
     """Counters for one `--reevaluate` run.
 
     Attributes:
+        window_jobs: Jobs (any status) first seen in the window.
         checked: `IGNORED` jobs in the window that were re-checked.
         candidates: Jobs among them that match at least one profile now.
         requeued: Candidates moved back to `NEW` (always 0 in a dry run).
+        demote_candidates: Unsent `NEW` jobs in the window that no longer match.
+        demoted: Those moved to `IGNORED` (always 0 in a dry run).
+        report_only: Jobs at `NOTIFIED` or later that no longer match; never changed.
+        group_changes: Jobs whose duplicate group changes.
+        regrouped: Group changes written (always 0 in a dry run).
         notified: Notifications delivered by the notification stage.
         failed: Notifications that failed; those jobs stay `NEW`.
         deferred: `NEW` jobs not attempted (notifier unavailable or too many
             consecutive failures); they stay `NEW`.
     """
 
+    window_jobs: int = 0
     checked: int = 0
     candidates: int = 0
     requeued: int = 0
+    demote_candidates: int = 0
+    demoted: int = 0
+    report_only: int = 0
+    group_changes: int = 0
+    regrouped: int = 0
     notified: int = 0
     failed: int = 0
     deferred: int = 0
@@ -790,6 +912,102 @@ def plan_reevaluation(jobs: Sequence[JobPost], engine: RuleEngine) -> list[tuple
     return plan
 
 
+@dataclass(frozen=True, slots=True)
+class ReevaluationPlan:
+    """What `--reevaluate` changes, as computed by `build_reevaluation_plan`.
+
+    Attributes:
+        added: `IGNORED` jobs that match now, with their matched profiles; they become `NEW`.
+        removed: Unsent `NEW` jobs that no longer match; they become `IGNORED`.
+        report_only: Jobs at `NOTIFIED` or later that no longer match; reported, never changed.
+        group_changes: The new duplicate group of each job whose group changes,
+            keyed by `(platform, external_id)`.
+        groups: The duplicate groups of the window's jobs once the changes are
+            applied, as (group ID, members oldest first), oldest group first.
+    """
+
+    added: list[tuple[JobPost, list[str]]]
+    removed: list[JobPost]
+    report_only: list[JobPost]
+    group_changes: dict[tuple[str, str], str]
+    groups: list[tuple[str, list[JobPost]]]
+
+
+def _oldest_first(job: JobPost) -> tuple[datetime, str, str]:
+    """Sort key: oldest `created_at` first, ties broken by platform and external ID."""
+    return job.created_at, job.platform, job.external_id
+
+
+def _changes_in_groups_of(
+    jobs: Sequence[JobPost], changes: dict[tuple[str, str], str]
+) -> dict[tuple[str, str], str]:
+    """Keep the group changes that land in a group containing one of `jobs` (once the changes apply).
+
+    The other changes concern only stored jobs outside the scope of the run,
+    for example after `duplicates` settings were edited; they are left to a
+    `--reevaluate` whose window covers those jobs.
+    """
+    groups = {changes.get((job.platform, job.external_id), job.duplicate_group) for job in jobs}
+    return {key: group for key, group in changes.items() if group in groups}
+
+
+def _groups_after(
+    window_jobs: Sequence[JobPost], context_jobs: Sequence[JobPost], changes: dict[tuple[str, str], str]
+) -> list[tuple[str, list[JobPost]]]:
+    """Return the groups with a window job once `changes` apply, members oldest first, oldest group first."""
+    members: dict[str, dict[tuple[str, str], JobPost]] = defaultdict(dict)
+    for job in [*window_jobs, *context_jobs]:
+        key = (job.platform, job.external_id)
+        group = changes.get(key, job.duplicate_group)
+        if group is not None:
+            members[group].setdefault(key, job)
+    window_groups = {changes.get((job.platform, job.external_id), job.duplicate_group) for job in window_jobs}
+    groups = [
+        (group, sorted(members[group].values(), key=_oldest_first))
+        for group in window_groups
+        if group is not None and len(members[group]) >= 2
+    ]
+    return sorted(groups, key=lambda item: _oldest_first(item[1][0]))
+
+
+def build_reevaluation_plan(
+    window_jobs: Sequence[JobPost],
+    context_jobs: Sequence[JobPost],
+    engine: RuleEngine,
+    config: AppConfig,
+) -> ReevaluationPlan:
+    """Compute the four `--reevaluate` sections; a pure function that reads and changes nothing.
+
+    Args:
+        window_jobs: Jobs first seen within `--since-days`, any status. Only
+            their statuses are re-evaluated.
+        context_jobs: Other stored jobs the window's jobs may duplicate: those
+            first seen up to `duplicates.window_days` before the window, and
+            the other members of their groups. They can join the window's
+            groups, but their statuses are never re-evaluated.
+        engine: A rule engine built from the current profiles.
+        config: The current config; its `duplicates` section drives grouping.
+    """
+    added = plan_reevaluation(window_jobs, engine)
+    removed: list[JobPost] = []
+    report_only: list[JobPost] = []
+    for job in window_jobs:
+        if job.status == JobStatus.IGNORED or engine.match_profiles(job):
+            continue
+        if job.status == JobStatus.NEW:
+            removed.append(job)
+        else:
+            report_only.append(job)
+    group_changes = _changes_in_groups_of(window_jobs, assign_duplicate_groups(window_jobs, context_jobs, config))
+    return ReevaluationPlan(
+        added=added,
+        removed=removed,
+        report_only=report_only,
+        group_changes=group_changes,
+        groups=_groups_after(window_jobs, context_jobs, group_changes),
+    )
+
+
 def _display_width(text: str) -> int:
     """Return the terminal width of `text`: zero-width marks and joiners (such as ZWNJ) count 0, wide characters 2."""
     width = 0
@@ -810,17 +1028,15 @@ def _fit(text: str, width: int) -> str:
     return text + " " * (width - _display_width(text))
 
 
-def _format_reevaluation_table(plan: Sequence[tuple[JobPost, list[str]]]) -> str:
-    """Render the dry-run candidates as a plain-text table: platform, ID, title, matched profiles."""
-    rows = [
-        (job.platform, job.external_id, " ".join(job.title.split()), ", ".join(matched)) for job, matched in plan
-    ]
-    headers = ("Platform", "ID", "Title", "Matched profiles")
+def _format_table(headers: Sequence[str], rows: Sequence[Sequence[str]]) -> str:
+    """Render rows as a plain-text table with aligned columns; long titles and company names are truncated."""
     widths = [
-        max([_display_width(header)] + [_display_width(row[index]) for row in rows])
+        max([_display_width(header)] + [_display_width(" ".join(row[index].split())) for row in rows])
         for index, header in enumerate(headers)
     ]
-    widths[2] = min(widths[2], _TABLE_TITLE_MAX)
+    for index, header in enumerate(headers):
+        if header in _TABLE_COLUMN_MAX:
+            widths[index] = min(widths[index], _TABLE_COLUMN_MAX[header])
     lines = [
         "  ".join(_fit(cell, width) for cell, width in zip(headers, widths, strict=True)).rstrip(),
         "  ".join("-" * width for width in widths),
@@ -831,6 +1047,118 @@ def _format_reevaluation_table(plan: Sequence[tuple[JobPost, list[str]]]) -> str
     return "\n".join(lines)
 
 
+def _format_reevaluation_table(plan: Sequence[tuple[JobPost, list[str]]]) -> str:
+    """Render `plan_reevaluation` candidates as a plain-text table: platform, ID, title, matched profiles."""
+    rows = [(job.platform, job.external_id, job.title, ", ".join(matched)) for job, matched in plan]
+    return _format_table(("Platform", "ID", "Title", "Matched profiles"), rows)
+
+
+def _job_cells(job: JobPost) -> tuple[str, str, str, str]:
+    """Return the platform, ID, title, and company cells of a job (company "-" when blank)."""
+    return job.platform, job.external_id, job.title, job.company.strip() or "-"
+
+
+def _format_section(heading: str, table: str | None, empty: str) -> str:
+    """Render one dry-run section: its heading, then the table, or `empty` when there is nothing to list."""
+    return f"{heading}\n{table if table is not None else empty}"
+
+
+def _format_reevaluation_plan(plan: ReevaluationPlan) -> str:
+    """Render the four `--reevaluate --dry-run` sections as plain text.
+
+    Each section lists platform, ID, title, and company, plus its own detail
+    column: the matched profiles, the kept status, or the group and its change.
+    """
+    added = _format_section(
+        f"{_SECTION_ADDED} (added): {len(plan.added)} IGNORED job(s) would be requeued as NEW and notified",
+        _format_table(
+            ("Platform", "ID", "Title", "Company", "Matched profiles"),
+            [(*_job_cells(job), ", ".join(matched)) for job, matched in plan.added],
+        )
+        if plan.added
+        else None,
+        "No IGNORED job in the window matches the current profiles.",
+    )
+    removed = _format_section(
+        f"{_SECTION_REMOVED} (removed): {len(plan.removed)} unsent NEW job(s) would become IGNORED",
+        _format_table(("Platform", "ID", "Title", "Company"), [_job_cells(job) for job in plan.removed])
+        if plan.removed
+        else None,
+        "Every unsent NEW job in the window still matches.",
+    )
+    report_only = _format_section(
+        f"{_SECTION_REPORT_ONLY} (no longer match, report only): {len(plan.report_only)} job(s) "
+        "already notified or later; their status is not changed",
+        _format_table(
+            ("Platform", "ID", "Title", "Company", "Status"),
+            [(*_job_cells(job), job.status.value) for job in plan.report_only],
+        )
+        if plan.report_only
+        else None,
+        "Every job in the window that was already notified still matches.",
+    )
+    rows: list[tuple[str, ...]] = []
+    for group, members in plan.groups:
+        for member in members:
+            key = (member.platform, member.external_id)
+            if key not in plan.group_changes:
+                change = ""
+            elif member.duplicate_group is None:
+                change = "joins"
+            else:
+                change = f"moves from {member.duplicate_group}"
+            rows.append((group, *_job_cells(member), change))
+    groups = _format_section(
+        f"{_SECTION_GROUPS} (duplicate groups): {len(plan.groups)} group(s); "
+        f"{len(plan.group_changes)} job(s) would get a new group",
+        _format_table(("Group", "Platform", "ID", "Title", "Company", "Change"), rows) if rows else None,
+        "No probable duplicates among the jobs in the window.",
+    )
+    return "\n\n".join((added, removed, report_only, groups))
+
+
+async def _apply_reevaluation(db: Database, plan: ReevaluationPlan, summary: _ReevaluationSummary) -> None:
+    """Write a re-evaluation plan: requeue, demote, log the report-only jobs, and update duplicate groups.
+
+    Status changes are compare-and-set, so a job whose status changed since
+    the plan was computed is left alone.
+    """
+    for job, matched in plan.added:
+        if await db.requeue_ignored(job.platform, job.external_id, matched):
+            summary.requeued += 1
+            logger.info(
+                "[{}] Requeued {}: {} | {} | profiles: {}",
+                job.platform,
+                job.external_id,
+                job.title,
+                job.company or "-",
+                ", ".join(matched),
+            )
+    for job in plan.removed:
+        if await db.demote_new(job.platform, job.external_id):
+            summary.demoted += 1
+            logger.info(
+                "[{}] Demoted {} to IGNORED (no longer matches): {} | {}",
+                job.platform,
+                job.external_id,
+                job.title,
+                job.company or "-",
+            )
+    for job in plan.report_only:
+        logger.info(
+            "[{}] {} no longer matches; its status {} is kept (report only): {} | {}",
+            job.platform,
+            job.external_id,
+            job.status.value,
+            job.title,
+            job.company or "-",
+        )
+    for (platform, external_id), group in plan.group_changes.items():
+        await db.set_duplicate_group(platform, external_id, group)
+        summary.regrouped += 1
+        logger.info("[{}] Job {} -> duplicate group {}", platform, external_id, group)
+
+
 async def _reevaluate(
     settings: Settings,
     config: AppConfig,
@@ -838,15 +1166,19 @@ async def _reevaluate(
     since_days: int,
     dry_run: bool,
 ) -> _ReevaluationSummary:
-    """Re-check `IGNORED` jobs first seen in the last `since_days` days against the current profiles.
+    """Re-check the jobs first seen in the last `since_days` days against the current profiles.
 
     Steps:
     1. Open the database and apply pending migrations (this happens in a dry
        run too; migrations never change job rows).
-    2. Load the `IGNORED` jobs in the window and run `plan_reevaluation`.
-    3. Dry run: print the candidates as a table and stop; nothing is changed or sent.
-    4. Otherwise: requeue each candidate as `NEW` (`requeue_ignored`), then run
-       the same notification stage as `--once`, which sends every `NEW` job.
+    2. Load the jobs in the window (any status) and, for duplicate grouping,
+       the jobs first seen up to `duplicates.window_days` earlier plus the
+       other members of their groups. Run `build_reevaluation_plan`.
+    3. Dry run: print the four sections and stop; nothing is changed or sent.
+    4. Otherwise: requeue `IGNORED` jobs that match now (`requeue_ignored`),
+       demote unsent `NEW` jobs that no longer match (`demote_new`), log the
+       report-only jobs, write the duplicate-group changes, then run the same
+       notification stage as `--once`, which sends every `NEW` job.
 
     Never launches a browser.
     """
@@ -855,7 +1187,7 @@ async def _reevaluate(
     summary = _ReevaluationSummary()
     outcome = "failed"
     logger.info(
-        "Re-evaluation started{}: IGNORED jobs first seen in the last {} day(s) (since {:%Y-%m-%d %H:%M} UTC)",
+        "Re-evaluation started{}: jobs first seen in the last {} day(s) (since {:%Y-%m-%d %H:%M} UTC)",
         " (dry run)" if dry_run else "",
         since_days,
         since,
@@ -864,33 +1196,33 @@ async def _reevaluate(
         rule_engine = RuleEngine(config)
         async with Database(settings.DB_PATH) as db:
             await db.init_db()
-            ignored = await db.get_jobs_by_status(JobStatus.IGNORED, since=since)
-            summary.checked = len(ignored)
-            plan = plan_reevaluation(ignored, rule_engine)
-            summary.candidates = len(plan)
-            logger.info("{} IGNORED job(s) checked; {} match the current profiles", summary.checked, len(plan))
+            stored = await _load_grouping_context(db, since - timedelta(days=config.duplicates.window_days))
+            window_jobs = [job for job in stored if job.created_at >= since]
+            context_jobs = [job for job in stored if job.created_at < since]
+            plan = build_reevaluation_plan(window_jobs, context_jobs, rule_engine, config)
+            summary.window_jobs = len(window_jobs)
+            summary.checked = sum(1 for job in window_jobs if job.status == JobStatus.IGNORED)
+            summary.candidates = len(plan.added)
+            summary.demote_candidates = len(plan.removed)
+            summary.report_only = len(plan.report_only)
+            summary.group_changes = len(plan.group_changes)
+            logger.info(
+                "{} job(s) in the window ({} older job(s) for duplicate grouping): {} IGNORED job(s) match now, "
+                "{} NEW job(s) and {} notified-or-later job(s) no longer match, {} job(s) change duplicate group",
+                len(window_jobs),
+                len(context_jobs),
+                len(plan.added),
+                len(plan.removed),
+                len(plan.report_only),
+                len(plan.group_changes),
+            )
 
             if dry_run:
-                if plan:
-                    print(f"\n{len(plan)} IGNORED job(s) would be requeued as NEW and notified:\n")
-                    print(_format_reevaluation_table(plan))
-                    print()
-                else:
-                    print("\nNo IGNORED job in the window matches the current profiles.\n")
+                print(f"\n{_format_reevaluation_plan(plan)}\n")
                 outcome = "finished (dry run: nothing changed, nothing sent)"
                 return summary
 
-            for job, matched in plan:
-                if await db.requeue_ignored(job.platform, job.external_id, matched):
-                    summary.requeued += 1
-                    logger.info(
-                        "[{}] Requeued {}: {} | {} | profiles: {}",
-                        job.platform,
-                        job.external_id,
-                        job.title,
-                        job.company or "-",
-                        ", ".join(matched),
-                    )
+            await _apply_reevaluation(db, plan, summary)
 
             progress = _RunProgress(started=started, stage="notifying")
             platform_summaries: dict[Platform, PlatformSummary] = {}
@@ -904,11 +1236,15 @@ async def _reevaluate(
         raise
     finally:
         text = (
-            f"checked {summary.checked} | requeued {summary.requeued} | "
+            f"in window {summary.window_jobs} | IGNORED checked {summary.checked} | requeued {summary.requeued} | "
+            f"demoted {summary.demoted} | report only {summary.report_only} | regrouped {summary.regrouped} | "
             f"notified {summary.notified} | failed {summary.failed}"
         )
         if dry_run:
-            text += f" | would requeue {summary.candidates}"
+            text += (
+                f" | would requeue {summary.candidates} | would demote {summary.demote_candidates} | "
+                f"would regroup {summary.group_changes}"
+            )
         if summary.deferred:
             text += f" | deferred {summary.deferred}"
         logger.info("Re-evaluation {} in {}: {}", outcome, _format_duration(time.monotonic() - started), text)
@@ -1003,7 +1339,10 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     mode.add_argument(
         "--reevaluate",
         action="store_true",
-        help="re-check stored IGNORED jobs against the current profiles, requeue matches, and notify them",
+        help=(
+            "re-check stored jobs against the current profiles: requeue IGNORED jobs that match now, "
+            "demote unsent NEW jobs that no longer match, regroup duplicates, and notify"
+        ),
     )
     parser.add_argument("--headful", action="store_true", help="show the browser window (overrides HEADLESS)")
     parser.add_argument(
@@ -1017,7 +1356,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help=f"with --reevaluate: only jobs first seen in the last N days (default {_DEFAULT_SINCE_DAYS})",
     )
     parser.add_argument(
-        "--dry-run", action="store_true", help="with --reevaluate: print the candidates and change nothing"
+        "--dry-run", action="store_true", help="with --reevaluate: print what would change and change nothing"
     )
     args = parser.parse_args(argv)
     if not args.reevaluate:

@@ -16,7 +16,9 @@ from src import database
 from src.database import Database
 from src.models import ApplicationRecord, JobPost, JobStatus, TailoredResumeRecord, WorkMode
 
-_LATEST_VERSION = 2
+_LATEST_VERSION = 3
+# Columns appended to `jobs` after Task 7 (v3: duplicate_group); Phase 1 rows are compared without them.
+_LATER_JOB_COLUMNS = 1
 
 # The Phase 1 schema exactly as Task 2 created it, before versioning existed.
 _PHASE1_SCHEMA = """
@@ -155,13 +157,13 @@ def test_fresh_database_gets_latest_schema_without_backup(tmp_path: Path) -> Non
 def test_v0_database_migrates_with_rows_preserved_and_backup(tmp_path: Path) -> None:
     db_path = tmp_path / "jobs.db"
     _make_phase1_db(db_path)
-    jobs_schema_before = [entry for entry in _schema(db_path) if entry[1] in ("jobs", "idx_jobs_status")]
+    index_schema_before = [entry for entry in _schema(db_path) if entry[1] == "idx_jobs_status"]
 
     _init(db_path)
 
     assert _user_version(db_path) == _LATEST_VERSION
-    assert [row[1:] for row in _rows(db_path)] == _PHASE1_ROWS
-    assert [entry for entry in _schema(db_path) if entry[1] in ("jobs", "idx_jobs_status")] == jobs_schema_before
+    assert [row[1:-_LATER_JOB_COLUMNS] for row in _rows(db_path)] == _PHASE1_ROWS
+    assert [entry for entry in _schema(db_path) if entry[1] == "idx_jobs_status"] == index_schema_before
     assert _rows(db_path, "tailored_resumes") == []
     assert _rows(db_path, "applications") == []
 
@@ -238,7 +240,9 @@ def test_future_schema_version_is_refused(tmp_path: Path) -> None:
     _make_phase1_db(db_path, user_version=_LATEST_VERSION + 1)
     schema_before = _schema(db_path)
 
-    with pytest.raises(RuntimeError, match=r"schema version 3.*supports versions up to 2"):
+    with pytest.raises(
+        RuntimeError, match=rf"schema version {_LATEST_VERSION + 1}.*supports versions up to {_LATEST_VERSION}"
+    ):
         _init(db_path)
 
     assert _user_version(db_path) == _LATEST_VERSION + 1

@@ -5,6 +5,8 @@ Delivery goes through a single `httpx.AsyncClient`, optionally via a proxy
 need). Network errors and 5xx responses are retried with exponential backoff,
 HTTP 429 waits for Telegram's `retry_after`, and other 4xx errors fail at once.
 `send_job` never raises for API or network failures; it returns False instead.
+A job with probable duplicates gets a «🔁 احتمالاً تکراری» line that links to
+the other postings.
 
 Smoke test (sends a real message): `uv run python -m src.notifier.telegram`
 """
@@ -16,6 +18,7 @@ import html
 import logging
 import sys
 import time
+from collections.abc import Sequence
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -46,7 +49,8 @@ _BACKOFF = wait_exponential_jitter(initial=1, max=30, jitter=1)
 # Telegram's limit is 4096 characters per message. Fields are truncated *before*
 # escaping and rendering, so the HTML is never cut. Worst case: the caps below sum
 # to 540 characters; html.escape expands one character to at most 6 (`&quot;`),
-# giving 3240, plus under 300 characters of fixed template text: < 4096.
+# giving 3240, plus under 300 characters of fixed template text: < 4096. The
+# duplicates line comes last and only gets the space that is left.
 _MAX_MESSAGE_CHARS = 4096
 _TITLE_MAX = 200
 _COMPANY_MAX = 100
@@ -69,6 +73,11 @@ _PLATFORM_NAMES: dict[Platform, str] = {
 }
 
 _VIEW_BUTTON_TEXT = "🔗 مشاهده آگهی در سایت"
+
+_DUPLICATES_LABEL = "🔁 احتمالاً تکراری"
+_DUPLICATES_SEPARATOR = "، "
+# Other URLs (never expected from the scrapers) are shown as plain text, not as links.
+_LINK_SCHEMES = frozenset({"http", "https"})
 
 
 class _TelegramError(Exception):
@@ -142,8 +151,59 @@ def _field(text: str | None, limit: int, *, default: str = _UNKNOWN) -> str:
     return html.escape(_truncate(raw, limit) if raw else default)
 
 
-def _render_message(job: JobPost) -> str:
-    """Render the HTML message body for a job (always within Telegram's 4096-character limit)."""
+def _duplicate_link(job: JobPost) -> str:
+    """Render a link to a posting, labeled with its platform name; plain text if the URL is not http(s)."""
+    name = html.escape(_PLATFORM_NAMES[job.platform])
+    url = job.url.strip()
+    if urlsplit(url).scheme.lower() not in _LINK_SCHEMES:
+        return name
+    return f'<a href="{html.escape(url, quote=True)}">{name}</a>'
+
+
+def _more_postings(count: int, *, after_links: bool) -> str:
+    """Render the summary of postings left out for lack of space ("" when none are left out)."""
+    if not count:
+        return ""
+    return f" و {count} آگهی دیگر" if after_links else f" {count} آگهی"
+
+
+def _render_duplicates(job: JobPost, duplicates: Sequence[JobPost], budget: int) -> str:
+    """Render the «🔁 احتمالاً تکراری» line with links to the other postings, in at most `budget` characters.
+
+    The job itself and repeated postings are skipped; "" means no other
+    posting is left. Links that do not fit are counted instead («و 2 آگهی
+    دیگر»), so the message never exceeds Telegram's limit.
+    """
+    seen = {(job.platform, job.external_id)}
+    others: list[JobPost] = []
+    for other in duplicates:
+        key = (other.platform, other.external_id)
+        if key not in seen:
+            seen.add(key)
+            others.append(other)
+    if not others:
+        return ""
+
+    line = f"{_DUPLICATES_LABEL}:"
+    if len(line) + len(_more_postings(len(others), after_links=False)) > budget:
+        logger.warning("No room for the duplicates line of job {}:{}", job.platform, job.external_id)
+        return ""
+    # Invariant: `line` plus the summary of the postings not yet shown fits in `budget`.
+    for shown, other in enumerate(others):
+        extended = f"{line}{_DUPLICATES_SEPARATOR if shown else ' '}{_duplicate_link(other)}"
+        left = len(others) - shown - 1
+        if len(extended) + len(_more_postings(left, after_links=True)) > budget:
+            return line + _more_postings(len(others) - shown, after_links=bool(shown))
+        line = extended
+    return line
+
+
+def _render_message(job: JobPost, duplicates: Sequence[JobPost] = ()) -> str:
+    """Render the HTML message body for a job (always within Telegram's 4096-character limit).
+
+    When `duplicates` lists other postings of the same position, a last line
+    «🔁 احتمالاً تکراری: JobVision، Jobinja» links to each of them.
+    """
     lines = [
         f"🆕 <b>{_field(job.title, _TITLE_MAX)}</b>",
         f"🏛 {_field(job.company, _COMPANY_MAX)}",
@@ -155,7 +215,12 @@ def _render_message(job: JobPost) -> str:
     profiles = "، ".join(job.matched_profiles)
     lines.append(f"🎯 پروفایل‌ها: {_field(profiles, _PROFILES_MAX, default='—')}")
     lines.append(f"🌐 منبع: {html.escape(_PLATFORM_NAMES[job.platform])}")
-    return "\n".join(lines)
+    text = "\n".join(lines)
+    if duplicates:
+        duplicates_line = _render_duplicates(job, duplicates, _MAX_MESSAGE_CHARS - len(text) - 1)
+        if duplicates_line:
+            text = f"{text}\n{duplicates_line}"
+    return text
 
 
 def _build_keyboard(job: JobPost) -> dict[str, Any]:
@@ -228,11 +293,16 @@ class TelegramNotifier:
             self._client = None
             logger.debug("Telegram notifier closed")
 
-    async def send_job(self, job: JobPost) -> bool:
+    async def send_job(self, job: JobPost, *, duplicates: Sequence[JobPost] = ()) -> bool:
         """Send one job notification.
 
         Consecutive sends are spaced at least 1.0 s apart, so callers can loop
         without sleeping.
+
+        Args:
+            job: The job to announce.
+            duplicates: Other postings of the same position (any status);
+                when not empty, the message links to them under «🔁 احتمالاً تکراری».
 
         Returns:
             True if Telegram accepted the message, False after any API or
@@ -243,7 +313,7 @@ class TelegramNotifier:
 
         payload = {
             "chat_id": self._settings.TELEGRAM_CHAT_ID,
-            "text": _render_message(job),
+            "text": _render_message(job, duplicates),
             "parse_mode": "HTML",
             "link_preview_options": {"is_disabled": True},
             "reply_markup": _build_keyboard(job),
@@ -272,7 +342,12 @@ class TelegramNotifier:
             finally:
                 self._last_sent_at = time.monotonic()
 
-        logger.info("Sent Telegram notification for job {}", job_key)
+        if duplicates:
+            logger.info(
+                "Sent Telegram notification for job {} (with {} probable duplicate(s))", job_key, len(duplicates)
+            )
+        else:
+            logger.info("Sent Telegram notification for job {}", job_key)
         return True
 
     async def _wait_for_pacing(self) -> None:

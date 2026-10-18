@@ -13,13 +13,28 @@ city_aliases:
 
 search_profiles:
   - profile_name: "AI & Automation"
-    keywords: ["AI", "هوش مصنوعی", "n8n", "Agentic", "LLM", "RAG"]
+    # Each item is a synonym group; a nested list groups synonyms. A keyword in
+    # the title always passes. Otherwise the description needs terms from at
+    # least `description_min_hits` different groups (synonyms count once).
+    keywords:
+      - ["AI", "هوش مصنوعی"]
+      - "n8n"
+      - "Agentic"
+      - "LLM"
+      - "RAG"
+    description_min_hits: 2
     exclude_keywords: ["کارآموز", "Intern"]
     location_rules:
       - city: "mashhad"
         remote_only: false   # Mashhad: accept on-site, hybrid, and remote
       - city: "ALL"
         remote_only: true    # Any other or unknown city: accept REMOTE only
+
+# Probable duplicates: the same position on both boards, or reposted. They are
+# labeled in notifications, never hidden.
+duplicates:
+  window_days: 45                # first seen at most this many days apart
+  title_overlap_threshold: 0.8   # |shared title tokens| / |tokens of the shorter title|
 
 # ── Phase 2: resume tailoring ──────────────────────────────────────────────
 # Remove the whole `llm` section to disable resume tailoring and the review bot.

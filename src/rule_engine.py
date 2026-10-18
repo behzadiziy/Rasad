@@ -1,11 +1,16 @@
 """Local, Persian-aware Rule Engine that decides which search profiles a job matches.
 
 A profile matches only if all three checks pass, in order:
-1. at least one keyword appears (as a whole word) in the title or description,
+1. keywords (matched as whole words): a keyword from any synonym group
+   appears in the title, or the description contains terms from at least
+   `description_min_hits` distinct groups; repeating a term, or using two
+   synonyms of one group, counts once,
 2. no exclusion keyword appears in the title,
 3. the job's city and work mode satisfy the profile's location rules.
 
 Job text and keywords are normalized with the same `normalize_text` function.
+DEBUG logs name the keyword groups that matched, which helps when tuning
+`exclude_keywords` and `description_min_hits`.
 """
 
 from __future__ import annotations
@@ -45,10 +50,17 @@ def _compile_alternation(terms: Iterable[str]) -> re.Pattern[str] | None:
 
 @dataclass(frozen=True, slots=True)
 class _CompiledProfile:
-    """A search profile with its patterns precompiled."""
+    """A search profile with its patterns precompiled.
+
+    `keyword_re` matches any term of any group (the title check); `group_res`
+    holds one pattern per synonym group (the description check), and
+    `group_labels` names each group in debug logs.
+    """
 
     profile: SearchProfile
     keyword_re: re.Pattern[str] | None
+    group_res: tuple[re.Pattern[str], ...]
+    group_labels: tuple[str, ...]
     exclude_re: re.Pattern[str] | None
     rules: tuple[LocationRule, ...]
 
@@ -63,11 +75,26 @@ class _PreparedJob:
     work_mode: WorkMode
 
 
+def _keyword_groups(profile: SearchProfile) -> tuple[tuple[str, ...], ...]:
+    """Return the profile's keyword synonym groups; a plain string is a group of one."""
+    return tuple((group,) if isinstance(group, str) else tuple(group) for group in profile.keywords)
+
+
 def _compile_profile(profile: SearchProfile) -> _CompiledProfile:
-    """Precompile the keyword and exclusion patterns of a profile."""
+    """Precompile the keyword, synonym-group, and exclusion patterns of a profile."""
+    groups = _keyword_groups(profile)
+    group_res: list[re.Pattern[str]] = []
+    group_labels: list[str] = []
+    for terms in groups:
+        pattern = _compile_alternation(terms)
+        if pattern is not None:
+            group_res.append(pattern)
+            group_labels.append("|".join(terms))
     return _CompiledProfile(
         profile=profile,
-        keyword_re=_compile_alternation(profile.keywords),
+        keyword_re=_compile_alternation(term for terms in groups for term in terms),
+        group_res=tuple(group_res),
+        group_labels=tuple(group_labels),
         exclude_re=_compile_alternation(profile.exclude_keywords),
         rules=tuple(profile.location_rules),
     )
@@ -134,11 +161,7 @@ class RuleEngine:
         name = compiled.profile.profile_name
         job_ref = f"{job.platform}:{job.external_id}"
 
-        keyword_re = compiled.keyword_re
-        if keyword_re is None or not (
-            keyword_re.search(prepared.title) or keyword_re.search(prepared.description)
-        ):
-            logger.debug("Job {} rejected by {!r}: no keyword match", job_ref, name)
+        if not self._keywords_ok(compiled, prepared, job_ref):
             return False
 
         if compiled.exclude_re is not None and compiled.exclude_re.search(prepared.title):
@@ -155,6 +178,41 @@ class RuleEngine:
             )
             return False
 
+        return True
+
+    @staticmethod
+    def _keywords_ok(compiled: _CompiledProfile, prepared: _PreparedJob, job_ref: str) -> bool:
+        """Run the keyword check: any keyword in the title, else enough distinct groups in the description."""
+        name = compiled.profile.profile_name
+        if compiled.keyword_re is not None and (title_hit := compiled.keyword_re.search(prepared.title)):
+            logger.debug("Job {} keyword check of {!r}: title keyword {!r}", job_ref, name, title_hit.group(0))
+            return True
+
+        hits = [
+            label
+            for label, pattern in zip(compiled.group_labels, compiled.group_res, strict=True)
+            if pattern.search(prepared.description)
+        ]
+        needed = compiled.profile.description_min_hits
+        if len(hits) < needed:
+            logger.debug(
+                "Job {} rejected by {!r}: no keyword in the title, and {} of the {} required keyword "
+                "group(s) in the description {}",
+                job_ref,
+                name,
+                len(hits),
+                needed,
+                hits,
+            )
+            return False
+        logger.debug(
+            "Job {} keyword check of {!r}: {} description keyword group(s) {} (at least {} required)",
+            job_ref,
+            name,
+            len(hits),
+            hits,
+            needed,
+        )
         return True
 
     @staticmethod

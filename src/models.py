@@ -2,7 +2,9 @@
 
 Phase 2 and 3 add the LLM, tailoring, bot, and apply config sections, the
 extended `JobStatus` state machine (`can_transition`), and the records stored
-for tailored resumes and application attempts.
+for tailored resumes and application attempts. Task 7b adds keyword synonym
+groups with `description_min_hits`, the `duplicates` config section, and
+`JobPost.duplicate_group`.
 """
 
 from __future__ import annotations
@@ -249,14 +251,47 @@ class LocationRule(BaseModel):
 
 
 class SearchProfile(BaseModel):
-    """A named set of keywords, exclusions, and location rules."""
+    """A named set of keywords, exclusions, and location rules.
+
+    Each item of `keywords` is a synonym group: a nested list such as
+    `["AI", "هوش مصنوعی"]`, or a plain string, which is a group of one. A
+    keyword from any group in the title passes the keyword check. Otherwise
+    the description must contain terms from at least `description_min_hits`
+    distinct groups; the default of 1 means any keyword anywhere.
+    """
 
     profile_name: str = Field(min_length=1)
-    keywords: list[str] = Field(min_length=1)
+    keywords: list[str | list[str]] = Field(min_length=1)
     exclude_keywords: list[str] = Field(default_factory=list)
     location_rules: list[LocationRule] = Field(default_factory=list)
+    description_min_hits: int = Field(default=1, ge=1)
 
-    @field_validator("keywords", "exclude_keywords")
+    @field_validator("keywords")
+    @classmethod
+    def _validate_keyword_groups(cls, value: list[str | list[str]]) -> list[str | list[str]]:
+        """Reject empty groups, blank terms, and a term listed in more than one group.
+
+        A term shared by two groups would count as two distinct groups and
+        defeat `description_min_hits`, so synonyms must share one group.
+        """
+        first_group: dict[str, int] = {}
+        for position, group in enumerate(value, start=1):
+            terms = [group] if isinstance(group, str) else group
+            if not terms:
+                raise ValueError(f"keyword group {position} is empty; list at least one term")
+            blank = [term for term in terms if not normalize_text(term)]
+            if blank:
+                raise ValueError(f"keywords must not be blank after normalization, got {blank!r}")
+            for term in terms:
+                seen_in = first_group.setdefault(normalize_text(term), position)
+                if seen_in != position:
+                    raise ValueError(
+                        f"keyword {term!r} is listed in groups {seen_in} and {position}; "
+                        "a term may belong to one group only, so put synonyms in one nested list"
+                    )
+        return value
+
+    @field_validator("exclude_keywords")
     @classmethod
     def _no_blank_terms(cls, value: list[str]) -> list[str]:
         """Reject terms that are empty after normalization (they would match everything)."""
@@ -264,6 +299,16 @@ class SearchProfile(BaseModel):
         if blank:
             raise ValueError(f"keywords must not be blank after normalization, got {blank!r}")
         return value
+
+    @model_validator(mode="after")
+    def _min_hits_within_groups(self) -> SearchProfile:
+        """Require `description_min_hits` to be at most the number of keyword groups."""
+        if self.description_min_hits > len(self.keywords):
+            raise ValueError(
+                f"Profile {self.profile_name!r}: description_min_hits is {self.description_min_hits}, "
+                f"but the profile has only {len(self.keywords)} keyword group(s)"
+            )
+        return self
 
     @model_validator(mode="after")
     def _at_most_one_all_rule(self) -> SearchProfile:
@@ -345,11 +390,26 @@ class ApplyConfig(BaseModel):
     screenshots_dir: _NonBlankPath = Path("data/applications")
 
 
+class DuplicatesConfig(BaseModel):
+    """Probable-duplicate detection settings (the `duplicates` section); see `src/duplicates.py`.
+
+    Two postings are probable duplicates only if they were first seen within
+    `window_days` of each other and their title token sets overlap by at least
+    `title_overlap_threshold` (overlap coefficient), among other checks.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    window_days: int = Field(default=45, ge=1)
+    title_overlap_threshold: float = Field(default=0.8, gt=0, le=1)
+
+
 class AppConfig(BaseModel):
     """The full application configuration loaded from `config/config.yaml`.
 
     `llm` is optional: without it, Phase 2 features (resume tailoring and the
-    review bot) are disabled. The other Phase 2 and 3 sections have defaults.
+    review bot) are disabled. The other Phase 2 and 3 sections, and the
+    `duplicates` section, have defaults.
     """
 
     scheduler: SchedulerConfig
@@ -360,6 +420,7 @@ class AppConfig(BaseModel):
     tailoring: TailoringConfig = Field(default_factory=TailoringConfig)
     bot: BotConfig = Field(default_factory=BotConfig)
     apply: ApplyConfig = Field(default_factory=ApplyConfig)
+    duplicates: DuplicatesConfig = Field(default_factory=DuplicatesConfig)
 
     @field_validator("city_aliases")
     @classmethod
@@ -433,7 +494,12 @@ def load_app_config(path: str | Path = "config/config.yaml") -> AppConfig:
 
 
 class JobPost(BaseModel):
-    """A single job listing as scraped from a platform."""
+    """A single job listing as scraped from a platform.
+
+    `duplicate_group` links probable duplicates (the same position posted on
+    both boards, or reposted): every member stores the `"{platform}:{external_id}"`
+    of the group's earliest member. None means the job is in no group.
+    """
 
     platform: Platform
     external_id: str = Field(min_length=1)
@@ -447,6 +513,7 @@ class JobPost(BaseModel):
     matched_profiles: list[str] = Field(default_factory=list)
     status: JobStatus = JobStatus.NEW
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    duplicate_group: str | None = Field(default=None, min_length=1)
 
     @field_validator("created_at")
     @classmethod

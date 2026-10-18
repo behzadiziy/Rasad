@@ -11,6 +11,9 @@ Before an existing database is migrated, it is backed up next to itself as
 `{db_path}.bak-v{version}`. A database whose version is newer than the code is
 refused. Status changes made by the bot go through `transition_status`, an
 atomic compare-and-set that enforces `can_transition`.
+
+Probable duplicates (Task 7b) share a `duplicate_group` value: the
+`"{platform}:{external_id}"` of the group's earliest member (see `src/duplicates.py`).
 """
 
 from __future__ import annotations
@@ -102,6 +105,12 @@ _SCHEMA_V2: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS idx_applications_attempted_at ON applications(attempted_at)",
 )
 
+# v3 (Task 7b): probable-duplicate groups. Existing rows get NULL (no group).
+_SCHEMA_V3: tuple[str, ...] = (
+    "ALTER TABLE jobs ADD COLUMN duplicate_group TEXT",
+    "CREATE INDEX IF NOT EXISTS idx_jobs_duplicate_group ON jobs(duplicate_group)",
+)
+
 
 @dataclass(frozen=True, slots=True)
 class _Migration:
@@ -115,6 +124,7 @@ class _Migration:
 _MIGRATIONS: tuple[_Migration, ...] = (
     _Migration(1, "jobs table (Phase 1 schema)", _SCHEMA_V1),
     _Migration(2, "tailored_resumes and applications tables", _SCHEMA_V2),
+    _Migration(3, "jobs.duplicate_group column and index", _SCHEMA_V3),
 )
 
 if [migration.version for migration in _MIGRATIONS] != list(range(1, len(_MIGRATIONS) + 1)):
@@ -133,7 +143,10 @@ _JOB_COLUMNS = (
     "matched_profiles",
     "status",
     "created_at",
+    "duplicate_group",
 )
+
+_SELECT_JOBS_SQL = f"SELECT {', '.join(_JOB_COLUMNS)} FROM jobs"
 
 _INSERT_SQL = (
     f"INSERT OR IGNORE INTO jobs ({', '.join(_JOB_COLUMNS)}, updated_at) "
@@ -373,6 +386,7 @@ class Database:
             json.dumps(job.matched_profiles, ensure_ascii=False),
             job.status.value,
             _to_iso(job.created_at),
+            job.duplicate_group,
             _to_iso(_utcnow()),
         )
         async with conn.execute(_INSERT_SQL, params) as cursor:
@@ -423,7 +437,7 @@ class Database:
         it), so `since` selects jobs first seen in that window.
         """
         conn = self._require_conn()
-        sql = f"SELECT {', '.join(_JOB_COLUMNS)} FROM jobs WHERE status = ?"
+        sql = f"{_SELECT_JOBS_SQL} WHERE status = ?"
         params: list[str] = [JobStatus(status).value]
         if since is not None:
             sql += " AND created_at >= ?"
@@ -522,6 +536,82 @@ class Database:
         else:
             logger.info("Job {}:{} is not IGNORED (or unknown); not requeued", platform, external_id)
         return requeued
+
+    # ── Re-evaluation and duplicates (Task 7b) ─────────────────────────────
+
+    async def demote_new(self, platform: str, external_id: str) -> bool:
+        """Move a `NEW` job to `IGNORED` and clear its matched profiles (compare-and-set).
+
+        `--reevaluate` uses this for unsent jobs that no longer match any
+        profile. A single `UPDATE ... WHERE status = 'NEW'` statement, so a job
+        that was sent in the meantime (now `NOTIFIED`) is left alone.
+
+        Returns:
+            True if the job was `NEW` and is now `IGNORED`; False otherwise
+            (other status, or unknown job), in which case nothing changes.
+        """
+        conn = self._require_conn()
+        async with conn.execute(
+            "UPDATE jobs SET matched_profiles = ?, status = ?, updated_at = ? "
+            "WHERE platform = ? AND external_id = ? AND status = ?",
+            (
+                json.dumps([]),
+                JobStatus.IGNORED.value,
+                _to_iso(_utcnow()),
+                platform,
+                external_id,
+                JobStatus.NEW.value,
+            ),
+        ) as cursor:
+            demoted = cursor.rowcount == 1
+        await conn.commit()
+        if demoted:
+            logger.debug("Job {}:{} NEW -> IGNORED", platform, external_id)
+        else:
+            logger.info("Job {}:{} is not NEW (or unknown); not demoted", platform, external_id)
+        return demoted
+
+    async def get_jobs_since(self, since: datetime) -> list[JobPost]:
+        """Return every job (any status) whose `created_at` >= `since`, oldest first."""
+        conn = self._require_conn()
+        async with conn.execute(
+            f"{_SELECT_JOBS_SQL} WHERE created_at >= ? ORDER BY created_at, id", (_to_iso(since),)
+        ) as cursor:
+            rows = await cursor.fetchall()
+        jobs = [_row_to_job(row) for row in rows]
+        logger.debug("Found {} job(s) since {}", len(jobs), _to_iso(since))
+        return jobs
+
+    async def set_duplicate_group(self, platform: str, external_id: str, group: str | None) -> None:
+        """Set a job's duplicate group (None removes it) and refresh `updated_at`.
+
+        Logs a warning if the job is unknown, like `update_status`.
+
+        Raises:
+            ValueError: If `group` is an empty or whitespace-only string.
+        """
+        if group is not None and not group.strip():
+            raise ValueError("group must be None or a non-blank group ID")
+        conn = self._require_conn()
+        async with conn.execute(
+            "UPDATE jobs SET duplicate_group = ?, updated_at = ? WHERE platform = ? AND external_id = ?",
+            (group, _to_iso(_utcnow()), platform, external_id),
+        ) as cursor:
+            updated = cursor.rowcount
+        await conn.commit()
+        if updated:
+            logger.debug("Job {}:{} duplicate group -> {}", platform, external_id, group)
+        else:
+            logger.warning("Cannot set duplicate group {}: job {}:{} not found", group, platform, external_id)
+
+    async def get_duplicate_group_members(self, group: str) -> list[JobPost]:
+        """Return every job in a duplicate group (any status), oldest first."""
+        conn = self._require_conn()
+        async with conn.execute(
+            f"{_SELECT_JOBS_SQL} WHERE duplicate_group = ? ORDER BY created_at, id", (group,)
+        ) as cursor:
+            rows = await cursor.fetchall()
+        return [_row_to_job(row) for row in rows]
 
     # ── Tailored resumes (Task 7) ──────────────────────────────────────────
 
