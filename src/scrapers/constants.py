@@ -198,8 +198,81 @@ JOBVISION_CARD_REMOTE_SELECTOR = 'a[href$="/type/remote"]'
 # JOBINJA
 # ════════════════════════════════════════════════════════════════════════════
 
-# Source: data/debug/jobinja/20261018T111307_142562Z_page__jobs.html (absolute job links use this host)
+# Samples (data/debug/jobinja/, captured 2026-10-18 with the probe; Jobinja serves server-rendered HTML,
+# no JSON API):
+#   S1: 20261018T111307_142562Z_page__jobs.html (keyword «هوش مصنوعی», page 1, 20 cards; trimmed copy:
+#       tests/fixtures/jobinja/search_page.html), plus 20261018T111416_460676Z_page__jobs.html («AI») and
+#       20261018T114222_443693Z_page__jobs.html («دورکاری», page 1)
+#   S2: 20261018T114429_453432Z_page__jobs.html («دورکاری», `&page=2`: 20 cards, none repeated from page 1)
+#   S3: 20261018T111337_259035Z_page__companies_setuptrack_jobs_tNhZ.html and
+#       20261018T111337_261868Z_json_ld_job_posting.json (remote job; trimmed copy: tests/fixtures/jobinja/detail.html),
+#       plus the detail pages of tjrl (remote), tuk9 and tMcy (both on-site), captured 11:44 UTC
+#   S4: job URLs in S1, e.g. https://jobinja.ir/companies/aloostad/jobs/tEuf/<slug>?_ref=16&_t=<hex>
+#   S5: 20261018T114230_368182Z_page__jobs.html (keyword «zzqxwv», no results; trimmed copy:
+#       tests/fixtures/jobinja/empty_search.html)
+
+# Source: S1 (absolute job links use this host)
 JOBINJA_BASE_URL = "https://jobinja.ir"
-# Source: data/debug/jobinja/20261018T111307_142562Z_page__jobs.html: server-rendered results for
-# the keyword, and the page's own pagination links use `filters[keywords][0]=...&page=N`.
+# Source: S1/S2: server-rendered results for the keyword; the page's own paginator links use
+# `filters[keywords][0]=...&page=N`, and `&page=2` (S2) returned the next 20 jobs.
 JOBINJA_SEARCH_URL_TEMPLATE = "https://jobinja.ir/jobs?filters%5Bkeywords%5D%5B0%5D={keyword}&page={page}"
+
+# ── Search page ────────────────────────────────────────────────────────────
+# Source: S1/S2: `<ul class="o-listView__list c-jobListView__list">` holds the cards; it is absent in S5.
+JOBINJA_RESULTS_CONTAINER_SELECTOR = "ul.c-jobListView__list"
+# Source: S5: `<div class="c-jobSearch__noResult">` («متاسفانه برای فیلترهای اعمال شده نتیجه‌ای یافت نشد.»).
+# Waited for together with the container, so an empty search does not wait for the full timeout.
+JOBINJA_NO_RESULTS_SELECTOR = ".c-jobSearch__noResult"
+# VERIFY: how long (ms) to wait for the container or the no-result notice. Both are server-rendered in
+# S1/S5, so this only matters on slow loads.
+JOBINJA_SEARCH_WAIT_TIMEOUT_MS = 10_000
+# Source: S1: one `<li class="o-listView__item ... c-jobListView__item ...">` per job (20 per page), matched
+# inside the container. Detail pages reuse these cards for "similar jobs", outside any search container.
+JOBINJA_CARD_SELECTOR = "li.c-jobListView__item"
+# Source: S1: `<h2 class="c-jobListView__title"><a class="c-jobListView__titleLink" href="https://jobinja.ir/
+# companies/{company}/jobs/{code}/{slug}?_ref=16&_t=...">مدرس هوش مصنوعی (AI)</a><span ...passedDays>`.
+# The link text is the title (the sibling span holds «(۱۵ روز پیش)»).
+JOBINJA_CARD_LINK_SELECTOR = "a.c-jobListView__titleLink"
+JOBINJA_CARD_TITLE_SELECTOR = "a.c-jobListView__titleLink"
+# Source: S1: each card has three `<li class="c-jobListView__metaItem"><i class="... c-icon--{kind}"></i>
+# <span>...</span></li>` items, identified by the icon: construction = company («الو استاد | Alo Ostad»),
+# place = «province، city» («تهران، تهران», «البرز، کرج»), resume = contract type.
+JOBINJA_CARD_COMPANY_SELECTOR = "li.c-jobListView__metaItem > i.c-icon--construction + span"
+JOBINJA_CARD_CITY_SELECTOR = "li.c-jobListView__metaItem > i.c-icon--place + span"
+# Source: S1/S2: the contract badge `<span><span>قرارداد دورکاری</span><a href="/login/...">(برای مشاهده حقوق
+# وارد شوید)</a></span>`; the inner span holds only the label. Values seen: «قرارداد دورکاری» (on 19 of 20 cards
+# of the «دورکاری» search), «قرارداد تمام‌وقت», «قرارداد پاره‌وقت». Remote jobs show «دورکاری» here even when
+# they are also full-time (tNhZ, tjrl), so `detect_work_mode` maps it to REMOTE and the others to ONSITE.
+# Logged-out cards never show the salary, so the salary is read from the detail page.
+JOBINJA_CARD_WORK_TYPE_SELECTOR = "li.c-jobListView__metaItem > i.c-icon--resume + span > span"
+# Source: S4: the job code follows `/jobs/` in `/companies/{company}/jobs/{code}/{slug}` («tEuf», «tNhZ»,
+# «CvPu», «ABXz», «t734»). Codes differ across companies and are case-sensitive; the company page
+# `/companies/{company}/jobs` (no code) does not match. The host is optional so relative links match too.
+JOBINJA_EXTERNAL_ID_PATTERN = r"^(?:https?://(?:www\.)?jobinja\.ir)?/companies/[^/?#]+/jobs/([A-Za-z0-9]+)(?:[/?#]|$)"
+
+# ── Detail page ────────────────────────────────────────────────────────────
+# Source: S3: the JSON-LD `JobPosting.description` is the same HTML as this element (headings, <div>s,
+# <br>s, lists) on all four detail pages, so it keeps its line breaks and JSON-LD is tried first. This
+# element is the fallback: `<div class="o-box__text s-jobDesc ...">` after «شرح موقعیت شغلی».
+JOBINJA_DETAIL_DESCRIPTION_SELECTOR = "div.s-jobDesc"
+# Source: S3: the DOM description ends with a site link `<a class="no-desc-display">ثبت آگهی استخدام در جابینجا</a>`
+# that the JSON-LD description does not contain.
+JOBINJA_DETAIL_DESCRIPTION_EXCLUDE_SELECTOR = ".no-desc-display"
+# Source: S3: the info box above the description, `<ul class="c-jobView__firstInfoBox c-infoBox">`, has one
+# `<li class="c-infoBox__item"><h4 class="c-infoBox__itemTitle">{title}</h4><div class="tags">
+# <span class="black">{value}</span>...</div></li>` per field (category, location, work type, experience, salary).
+JOBINJA_DETAIL_INFO_ITEM_SELECTOR = "ul.c-jobView__firstInfoBox > li.c-infoBox__item"
+JOBINJA_DETAIL_INFO_TITLE_SELECTOR = "h4.c-infoBox__itemTitle"
+JOBINJA_DETAIL_INFO_VALUE_SELECTOR = ".tags > span"
+# Source: S3: the dedicated work-type field. Values: «تمام وقت» + «دورکاری» (tNhZ, tjrl: remote) and «تمام وقت»
+# alone (tuk9, tMcy). tuk9 is the only card in the «دورکاری» search without the remote badge («قرارداد تمام‌وقت»);
+# its field also lacks «دورکاری» (re-checked 2026-10-18 11:55 UTC). The scraper merges this field with the card
+# badge, and either one saying «دورکاری» makes the job REMOTE. JSON-LD `jobLocationType` is not used: it is
+# `TELECOMMUTE` on all four pages, including the on-site tMcy job.
+JOBINJA_DETAIL_WORK_TYPE_TITLE = "نوع همکاری"
+# Source: S3: salary field, e.g. «توافقی» (tNhZ) or «از ۱۰۰,۰۰۰,۰۰۰ تومان» (tjrl). JSON-LD `baseSalary` is not used:
+# it says 5000000 IRT for the «توافقی» job.
+JOBINJA_DETAIL_SALARY_TITLE = "حقوق"
+# VERIFY: how long (ms) to wait for the JSON-LD or description element. Both are server-rendered in S3, so
+# this only matters on slow loads.
+JOBINJA_DETAIL_WAIT_TIMEOUT_MS = 10_000
