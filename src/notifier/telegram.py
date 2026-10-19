@@ -33,6 +33,8 @@ from tenacity import (
     wait_exponential_jitter,
 )
 
+from src.bot.callbacks import encode_callback, job_ref
+from src.bot.messages import TAILOR_BUTTON_TEXT
 from src.models import JobPost, Platform, Settings, WorkMode
 
 # httpx/httpcore log each request URL at INFO, and Telegram URLs contain the bot token.
@@ -223,21 +225,21 @@ def _render_message(job: JobPost, duplicates: Sequence[JobPost] = ()) -> str:
     return text
 
 
-def _build_keyboard(job: JobPost) -> dict[str, Any]:
-    """Build the inline keyboard: one URL button that opens the job posting."""
-    rows: list[list[dict[str, str]]] = [[{"text": _VIEW_BUTTON_TEXT, "url": job.url}]]
+def _build_keyboard(job: JobPost, *, tailor_button: bool = False) -> dict[str, Any]:
+    """Build the inline keyboard: the URL button, plus «✍️ تنظیم رزومه» next to it when `tailor_button`."""
+    row: list[dict[str, str]] = [{"text": _VIEW_BUTTON_TEXT, "url": job.url}]
 
-    # ── Product Phase 2/3 extension point ───────────────────────────────────
-    # Callback buttons will be appended here as a second row:
-    #   {"text": "✍️ Tailor Resume", "callback_data": f"tailor:{job.platform}:{job.external_id}"}
-    #   {"text": "🚀 Auto-Apply",    "callback_data": f"apply:{job.platform}:{job.external_id}"}
-    # `callback_data` is limited to 64 bytes (UTF-8), so keep it to a short
-    # prefix plus the job key, e.g. `tailor:jobinja:{external_id}`, and never
-    # embed titles or URLs. Pressing these buttons does nothing until Product
-    # Phase 2 adds a bot listener (getUpdates/webhook) that handles callback_query.
-    # ────────────────────────────────────────────────────────────────────────
+    # The review bot (src/bot/) handles the `t:{jv|jb}:{external_id}` callback;
+    # src/bot/messages.py rebuilds this same keyboard to show progress on it.
+    if tailor_button:
+        try:
+            data = encode_callback("t", job_ref(job.platform, job.external_id))
+        except ValueError:
+            logger.warning("No tailor button for job {}:{}: callback data too long", job.platform, job.external_id)
+        else:
+            row.append({"text": TAILOR_BUTTON_TEXT, "callback_data": data})
 
-    return {"inline_keyboard": rows}
+    return {"inline_keyboard": [row]}
 
 
 def _describe(response: httpx.Response) -> tuple[dict[str, Any], str]:
@@ -316,7 +318,7 @@ class TelegramNotifier:
             "text": _render_message(job, duplicates),
             "parse_mode": "HTML",
             "link_preview_options": {"is_disabled": True},
-            "reply_markup": _build_keyboard(job),
+            "reply_markup": _build_keyboard(job, tailor_button=bool(self._settings.allowed_user_ids)),
         }
         job_key = f"{job.platform}:{job.external_id}"
 

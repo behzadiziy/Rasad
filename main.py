@@ -7,11 +7,17 @@ Setup and run (from the project root):
     cp config/.env.example config/.env       # then fill in values
     uv run python main.py --once --headful   # first run: pass Cloudflare, save browser state
     uv run python main.py --daemon
+    uv run python main.py --bot              # only the Telegram review bot
     uv run pytest
 
 Modes (one is required):
     --once            Run the pipeline once and exit (for cron or systemd timers).
     --daemon          Run on the schedule in `config/config.yaml` until SIGINT/SIGTERM.
+                      Also runs the Telegram review bot when TELEGRAM_ALLOWED_USER_IDS
+                      is set and the `llm` section and GEMINI_API_KEY are configured.
+    --bot             Run only the Telegram review bot (when scraping runs from cron).
+                      Without TELEGRAM_ALLOWED_USER_IDS it only answers /start and /id,
+                      so a new user can learn their numeric ID.
     --reevaluate      Re-check stored jobs against the current profiles: requeue
                       IGNORED jobs that match now, demote unsent NEW jobs that
                       no longer match, report sent jobs that no longer match,
@@ -60,8 +66,10 @@ from playwright.async_api import Browser, async_playwright
 from playwright.async_api import Error as PlaywrightError
 from pydantic import ValidationError
 
+from src.bot.service import run_bot
 from src.database import Database
 from src.duplicates import assign_duplicate_groups
+from src.llm.factory import create_llm_client
 from src.models import AppConfig, JobPost, JobStatus, Platform, Settings, load_app_config
 from src.notifier.telegram import TelegramNotifier
 from src.rule_engine import RuleEngine
@@ -695,6 +703,7 @@ class _Daemon:
         self._force = asyncio.Event()
         self._run_task: asyncio.Task[None] | None = None
         self._run_started: float | None = None
+        self._bot_task: asyncio.Task[None] | None = None
 
     async def run(self) -> int:
         """Start the scheduler, wait for a stop request, shut down, and return the exit code."""
@@ -722,6 +731,7 @@ class _Daemon:
             scheduler_config.active_hours,
             scheduler_config.timezone,
         )
+        self._start_bot()
         try:
             await self._stop.wait()
         except asyncio.CancelledError:
@@ -832,6 +842,8 @@ class _Daemon:
         logger.info("Stopping the scheduler")
         if self._scheduler.running:
             self._scheduler.shutdown(wait=False)
+        # The bot saw `_stop` too; it winds down while the current run finishes.
+        bot_stopping = asyncio.create_task(self._stop_bot(), name="bot-shutdown")
         task = self._run_task
         if task is not None and not task.done():
             logger.info("Waiting up to {:.0f}s for the current run to finish", _SHUTDOWN_GRACE_S)
@@ -846,12 +858,116 @@ class _Daemon:
                 await asyncio.wait({task}, timeout=_CANCEL_CLEANUP_TIMEOUT_S)
                 if not task.done():
                     logger.error("The run did not finish cleaning up within {:.0f}s", _CANCEL_CLEANUP_TIMEOUT_S)
+        await bot_stopping
         logger.info("Daemon stopped")
+
+    def _start_bot(self) -> None:
+        """Start the review bot next to the scheduler, or log why it does not start."""
+        reason = _bot_disabled_reason(self._settings, self._config)
+        if reason is not None:
+            logger.info("Telegram review bot not started: {}", reason)
+            return
+        self._bot_task = asyncio.create_task(self._guarded_bot(), name="review-bot")
+
+    async def _guarded_bot(self) -> None:
+        """Run the review bot until `_stop` is set; a crash is logged and the scheduler keeps running."""
+        try:
+            await run_bot(self._settings, self._config, self._stop)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("The Telegram review bot stopped; the scheduler keeps running")
+
+    async def _stop_bot(self) -> None:
+        """Wait for the bot to finish its in-flight work (it allows 60 s); a second signal cancels it."""
+        task = self._bot_task
+        if task is None or task.done():
+            return
+        # Without loop signal handlers (Windows), an interrupt arrives as a cancellation
+        # and `_stop` is not set yet; the bot stops on `_stop`.
+        self._stop.set()
+        force = asyncio.create_task(self._force.wait(), name="force-bot-shutdown")
+        try:
+            await asyncio.wait(
+                {task, force},
+                timeout=_SHUTDOWN_GRACE_S + _CANCEL_CLEANUP_TIMEOUT_S,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        finally:
+            force.cancel()
+        if not task.done():
+            logger.warning("Cancelling the review bot's in-flight work")
+            task.cancel()
+            await asyncio.wait({task}, timeout=_CANCEL_CLEANUP_TIMEOUT_S)
 
 
 async def _run_daemon(settings: Settings, config: AppConfig, *, headful: bool, debug_capture: bool) -> int:
     """Run the daemon until it is stopped and return the process exit code."""
     return await _Daemon(settings, config, headful=headful, debug_capture=debug_capture).run()
+
+
+# ── --bot ──────────────────────────────────────────────────────────────────
+
+
+def _bot_disabled_reason(settings: Settings, config: AppConfig) -> str | None:
+    """Return why the review bot cannot run, or None when it can."""
+    if not settings.allowed_user_ids:
+        return (
+            "TELEGRAM_ALLOWED_USER_IDS is empty in config/.env "
+            "(run `main.py --bot` and send /start to the bot to learn your ID)"
+        )
+    if config.llm is None:
+        return "config/config.yaml has no 'llm' section"
+    try:
+        create_llm_client(config, settings)
+    except ValueError as exc:
+        return str(exc)
+    return None
+
+
+async def _run_bot_only(settings: Settings, config: AppConfig) -> int:
+    """Run only the review bot until SIGINT/SIGTERM and return the process exit code.
+
+    The bot always starts, so a new user can send /start to learn their ID;
+    without allowed users it answers only /start and /id. The first signal
+    stops polling and gives in-flight work up to 60 s; a second one cancels it
+    at once.
+    """
+    if not settings.allowed_user_ids:
+        logger.warning(
+            "TELEGRAM_ALLOWED_USER_IDS is empty: the bot only answers /start and /id. Send /start to the bot "
+            "in a private chat, put the returned ID in config/.env, and restart"
+        )
+    else:
+        reason = _bot_disabled_reason(settings, config)
+        if reason is not None:
+            logger.warning("Resume tailoring will fail until this is fixed: {}", reason)
+    stop = asyncio.Event()
+    task = asyncio.current_task()
+
+    def on_signal() -> None:
+        """First signal: graceful stop. Second signal: cancel at once."""
+        if not stop.is_set():
+            logger.info("Stopping the review bot (press Ctrl+C again to cancel in-flight work immediately)")
+            stop.set()
+        elif task is not None:
+            task.cancel()
+
+    removers = [_add_signal_handler(sig, on_signal) for sig in (signal.SIGINT, signal.SIGTERM)]
+    try:
+        await run_bot(settings, config, stop)
+    except asyncio.CancelledError:
+        if task is not None:
+            task.uncancel()
+        logger.warning("Review bot interrupted; cleanup finished")
+        return _EXIT_INTERRUPTED
+    except Exception:
+        logger.exception("The Telegram review bot failed")
+        return _EXIT_FATAL
+    finally:
+        for remove in removers:
+            remove()
+    return _EXIT_OK
 
 
 # ── --reevaluate ───────────────────────────────────────────────────────────
@@ -1335,7 +1451,12 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     )
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--once", action="store_true", help="run the pipeline once and exit")
-    mode.add_argument("--daemon", action="store_true", help="run continuously on the configured schedule")
+    mode.add_argument(
+        "--daemon",
+        action="store_true",
+        help="run continuously on the configured schedule (with the Telegram review bot, when configured)",
+    )
+    mode.add_argument("--bot", action="store_true", help="run only the Telegram review bot")
     mode.add_argument(
         "--reevaluate",
         action="store_true",
@@ -1406,6 +1527,8 @@ def main(argv: list[str] | None = None) -> int:
             return asyncio.run(
                 _run_reevaluate(settings, config, since_days=args.since_days, dry_run=args.dry_run)
             )
+        if args.bot:
+            return asyncio.run(_run_bot_only(settings, config))
         runner = _run_daemon if args.daemon else _run_once
         return asyncio.run(runner(settings, config, headful=args.headful, debug_capture=args.debug_capture))
     except KeyboardInterrupt:
