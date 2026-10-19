@@ -1,0 +1,190 @@
+{#-
+  Resume template, rendered by src/resume/render.py with autoescaping on.
+  Every user-supplied text goes through the `bidi` filter, which escapes it and
+  isolates opposite-direction runs (Latin terms in Persian text, and Persian in
+  English text). Review-only parts are guarded by `review`.
+-#}
+<!DOCTYPE html>
+<html lang="{{ lang }}" dir="{{ dir }}">
+<head>
+<meta charset="utf-8">
+<title>{{ title }}</title>
+<style>
+{{ css }}
+</style>
+{% if review %}
+<style>
+/* Review copy: repeat the "not for sending" footer in every page's bottom margin. */
+@page {
+  @bottom-center {
+    content: "{{ labels.footer }}";
+    color: #b42318;
+    font-family: "Vazirmatn", sans-serif;
+    font-size: 8.5pt;
+    font-weight: 700;
+  }
+}
+</style>
+{% endif %}
+</head>
+<body class="{{ 'review' if review else 'clean' }}">
+{% if review %}
+<aside class="review-legend" role="note">
+  <p class="note-title">{{ labels.legend_title }}</p>
+  <p>{{ labels.legend_before }}<mark>{{ labels.legend_marked }}</mark>{{ labels.legend_after }}</p>
+  <p>{{ legend_counts }}</p>
+  {% if reordered %}
+  <p>{{ labels.reordered }} {{ reordered }}</p>
+  {% endif %}
+</aside>
+{% if warnings %}
+<aside class="review-warnings" role="note">
+  <p class="note-title">{{ labels.warnings }}</p>
+  <ul>
+    {% for warning in warnings %}
+    <li dir="auto">{{ warning }}</li>
+    {% endfor %}
+  </ul>
+</aside>
+{% endif %}
+{% endif %}
+
+<header class="contact">
+  <h1>{{ name | bidi(lang) }}</h1>
+  {% if contact %}
+  <ul class="contact-list">
+    {% for item in contact %}
+    {% if item.href %}
+    <li><bdi dir="ltr"><a href="{{ item.href }}">{{ item.text }}</a></bdi></li>
+    {% else %}
+    <li>{{ item.text | bidi(lang) }}</li>
+    {% endif %}
+    {% endfor %}
+  </ul>
+  {% endif %}
+</header>
+
+{% if summary.text %}
+<section class="summary">
+  <h2>{{ labels.summary }}</h2>
+  <p>{% if summary.marked %}<mark>{{ summary.text | bidi(lang) }}</mark>{% else %}{{ summary.text | bidi(lang) }}{% endif %}</p>
+</section>
+{% endif %}
+
+{% if experiences %}
+<section class="experiences">
+  <h2>{{ labels.experiences }}</h2>
+  {% for item in experiences %}
+  <article class="entry">
+    <div class="entry-head">
+      <h3>{{ item.title | bidi(lang) }}</h3>
+      {% if item.dates %}<span class="dates">{{ item.dates }}</span>{% endif %}
+    </div>
+    <p class="org">{{ item.org | bidi(lang) }}</p>
+    {% if item.bullets %}
+    <ul class="bullets">
+      {% for bullet in item.bullets %}
+      <li>{% if bullet.marked %}<mark>{{ bullet.text | bidi(lang) }}</mark>{% else %}{{ bullet.text | bidi(lang) }}{% endif %}</li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </article>
+  {% endfor %}
+</section>
+{% endif %}
+
+{% if projects %}
+<section class="projects">
+  <h2>{{ labels.projects }}</h2>
+  {% for item in projects %}
+  <article class="entry">
+    <div class="entry-head">
+      <h3>{{ item.name | bidi(lang) }}</h3>
+    </div>
+    {% if item.description %}<p class="description">{{ item.description | bidi(lang) }}</p>{% endif %}
+    {% if item.bullets %}
+    <ul class="bullets">
+      {% for bullet in item.bullets %}
+      <li>{% if bullet.marked %}<mark>{{ bullet.text | bidi(lang) }}</mark>{% else %}{{ bullet.text | bidi(lang) }}{% endif %}</li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+    {% if item.links %}
+    <p class="links">
+      {% for link in item.links %}<bdi dir="ltr"><a href="{{ link.href }}">{{ link.text }}</a></bdi>{% if not loop.last %} {% endif %}{% endfor %}
+    </p>
+    {% endif %}
+  </article>
+  {% endfor %}
+</section>
+{% endif %}
+
+{% if skills %}
+<section class="skills">
+  <h2>{{ labels.skills }}</h2>
+  {# One line: whitespace between inline items would show before each separator. #}
+  <ul class="inline-list">{% for skill in skills %}<li>{{ skill | bidi(lang) }}</li>{% endfor %}</ul>
+</section>
+{% endif %}
+
+{% if education %}
+<section class="education compact">
+  <h2>{{ labels.education }}</h2>
+  {% for item in education %}
+  <article class="entry">
+    <div class="entry-head">
+      <h3>{{ item.degree | bidi(lang) }}</h3>
+      {% if item.dates %}<span class="dates">{{ item.dates }}</span>{% endif %}
+    </div>
+    <p class="org">{{ item.institution | bidi(lang) }}</p>
+  </article>
+  {% endfor %}
+</section>
+{% endif %}
+
+{% if certifications %}
+<section class="certifications compact">
+  <h2>{{ labels.certifications }}</h2>
+  {% for item in certifications %}
+  <article class="entry">
+    <div class="entry-head">
+      <h3>{{ item.name | bidi(lang) }}</h3>
+      {% if item.dates %}<span class="dates">{{ item.dates }}</span>{% endif %}
+    </div>
+    {% if item.issuer %}<p class="org">{{ item.issuer | bidi(lang) }}</p>{% endif %}
+    {% if item.href %}<p class="links"><bdi dir="ltr"><a href="{{ item.href }}">{{ item.link_text }}</a></bdi></p>{% endif %}
+  </article>
+  {% endfor %}
+</section>
+{% endif %}
+
+{% if languages %}
+<section class="languages">
+  <h2>{{ labels.languages }}</h2>
+  <ul class="inline-list">{% for item in languages %}<li>{{ item | bidi(lang) }}</li>{% endfor %}</ul>
+</section>
+{% endif %}
+
+{% if review and removed %}
+<section class="removed">
+  <h2>{{ labels.removed }}</h2>
+  {% for group in removed %}
+  <h3>{{ group.heading }}</h3>
+  {% if group.inline %}
+  <ul class="inline-list">{% for item in group.entries %}<li>{{ item | bidi(lang) }}</li>{% endfor %}</ul>
+  {% else %}
+  <ul>
+    {% for item in group.entries %}
+    <li>{{ item | bidi(lang) }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  {% endfor %}
+</section>
+{% endif %}
+
+{% if review %}
+<footer class="review-footer">{{ labels.footer }}</footer>
+{% endif %}
+</body>
+</html>

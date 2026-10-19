@@ -1,0 +1,239 @@
+/*
+ * Resume stylesheet: one column of real, selectable text, styled for A4 print.
+ * src/resume/render.py prepends the Vazirmatn @font-face rules (base64 data
+ * URIs), so rendering needs no file or network access. Page margins are set
+ * by page.pdf(). Logical properties (inline-start/end) make the same rules
+ * work for right-to-left Persian and left-to-right English.
+ */
+
+:root {
+  --text: #1f2328;
+  --muted: #57606a;
+  --accent: #0b4f8a;
+  --rule: #d0d7de;
+  --mark: #fff0a0;
+  --review: #9a6700;
+  --review-bg: #fff8e1;
+  --danger: #b42318;
+  --danger-bg: #fef3f2;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  font-size: 10pt;
+}
+
+body {
+  margin: 0;
+  background: #ffffff;
+  color: var(--text);
+  font-family: "Vazirmatn", sans-serif;
+  line-height: 1.6;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+/* ── Contact header ─────────────────────────────────────────────────────── */
+
+.contact {
+  border-bottom: 2px solid var(--accent);
+  padding-bottom: 6pt;
+  margin-bottom: 4pt;
+}
+
+.contact h1 {
+  margin: 0 0 3pt;
+  color: var(--accent);
+  font-size: 20pt;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.contact-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2pt 14pt;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--muted);
+  font-size: 9pt;
+}
+
+/* ── Sections ───────────────────────────────────────────────────────────── */
+
+section {
+  margin-top: 10pt;
+}
+
+h2 {
+  margin: 0 0 5pt;
+  padding-bottom: 2pt;
+  border-bottom: 1px solid var(--rule);
+  color: var(--accent);
+  font-size: 11.5pt;
+  font-weight: 700;
+  break-after: avoid;
+}
+
+h3 {
+  margin: 0;
+  font-size: 10.5pt;
+  font-weight: 700;
+}
+
+p {
+  margin: 0;
+}
+
+.entry {
+  margin-bottom: 7pt;
+}
+
+.entry-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10pt;
+  break-after: avoid;
+}
+
+.dates {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-size: 9pt;
+  white-space: nowrap;
+}
+
+.org {
+  color: var(--muted);
+  break-after: avoid;
+}
+
+.description {
+  margin-top: 1pt;
+}
+
+.bullets {
+  margin: 2pt 0 0;
+  padding-inline-start: 14pt;
+}
+
+.bullets li {
+  margin-bottom: 1.5pt;
+  break-inside: avoid;
+}
+
+.links {
+  margin-top: 1pt;
+  color: var(--muted);
+  font-size: 9pt;
+}
+
+.links a + a {
+  margin-inline-start: 10pt;
+}
+
+/* Skills: one inline, comma-separated list (plain text for ATS parsers). */
+.inline-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.inline-list li {
+  display: inline;
+}
+
+.inline-list li + li::before {
+  content: ", ";
+}
+
+:lang(fa) .inline-list li + li::before {
+  content: "، ";
+}
+
+.compact .entry {
+  margin-bottom: 4pt;
+}
+
+/* ── Review copy only ───────────────────────────────────────────────────── */
+
+mark {
+  padding: 0 1pt;
+  border-radius: 2pt;
+  background: var(--mark);
+  color: inherit;
+}
+
+.review-legend,
+.review-warnings {
+  margin-bottom: 8pt;
+  padding: 5pt 8pt;
+  border-radius: 4pt;
+  font-size: 9pt;
+  break-inside: avoid;
+}
+
+.review-legend {
+  border: 1px solid var(--review);
+  background: var(--review-bg);
+}
+
+.review-warnings {
+  border: 1px solid var(--danger);
+  background: var(--danger-bg);
+}
+
+.review-legend .note-title,
+.review-warnings .note-title {
+  font-weight: 700;
+}
+
+/* Warnings are English sentences (dir="auto"), so pad both sides for their markers. */
+.review-warnings ul {
+  margin: 2pt 0 0;
+  padding-inline: 14pt;
+}
+
+.removed {
+  margin-top: 16pt;
+  padding-top: 6pt;
+  border-top: 2px dashed var(--danger);
+  color: var(--muted);
+}
+
+.removed h2 {
+  border-bottom-color: transparent;
+  color: var(--danger);
+}
+
+.removed h3 {
+  margin-top: 4pt;
+  font-size: 9.5pt;
+}
+
+.removed ul {
+  margin: 1pt 0 0;
+  padding-inline-start: 14pt;
+}
+
+/* The end-of-document footer; the template also repeats it in every page's
+   bottom margin with an @page margin box. */
+.review-footer {
+  margin-top: 14pt;
+  padding-top: 4pt;
+  border-top: 1px solid var(--rule);
+  color: var(--danger);
+  font-size: 8.5pt;
+  font-weight: 700;
+  text-align: center;
+}
