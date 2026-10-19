@@ -1,0 +1,90 @@
+# Test fixture: a fictional person. Never put real resume data here.
+contact:
+  name: {fa: "نگار آزمون", en: "Negar Azmoon"}
+  email: "negar.azmoon@example.com"
+  phone: "+98 900 111 2222"
+  location: {fa: "مشهد", en: "Mashhad"}
+  links:
+    - {label: "GitHub", url: "https://github.com/example-negar"}
+
+summary:
+  fa: "مهندس نرم‌افزار با ۵ سال سابقه در Python و ساخت سرویس‌های API."
+  en: "Software engineer with 5 years of experience in Python and building API services."
+
+experiences:
+  - id: alpha-backend
+    company: {fa: "سامانه‌های آلفا", en: "Alpha Systems"}
+    title: {fa: "توسعه‌دهنده ارشد بک‌اند", en: "Senior Backend Developer"}
+    location: {fa: "مشهد", en: "Mashhad"}
+    start: "2021-03"
+    start_jalali: "1399-12"
+    bullets:
+      - id: alpha-api
+        text:
+          fa: "طراحی API پرداخت با FastAPI برای ۱٬۲۰۰ فروشگاه"
+          en: "Designed the payment API with FastAPI for 1,200 stores"
+      - id: alpha-cache
+        text:
+          fa: "کاهش ۴۰٪ زمان پاسخ با Redis"
+          en: "Cut response time by 40% with Redis"
+      - id: alpha-ci
+        text:
+          fa: "راه‌اندازی CI/CD با GitHub Actions"
+          en: "Set up CI/CD with GitHub Actions"
+
+  - id: beta-developer
+    company: {fa: "نرم‌افزار بتا", en: "Beta Soft"}
+    title: {fa: "توسعه‌دهنده", en: "Developer"}
+    start: "2018-06"
+    end: "2021-02"
+    start_jalali: "1397-03"
+    end_jalali: "1399-11"
+    bullets:
+      - id: beta-dashboard
+        text: {en: "Built an internal dashboard with Django"}
+      - id: beta-cpp
+        text:
+          fa: "بهینه‌سازی ماژول C++ پردازش تصویر"
+          en: "Optimized a C++ image processing module"
+
+projects:
+  - id: gamma-bot
+    name: {fa: "ربات گاما", en: "Gamma Bot"}
+    description: {fa: "ربات تلگرام برای یادآوری", en: "A Telegram reminder bot"}
+    bullets:
+      - id: gamma-node
+        text:
+          fa: "پیاده‌سازی ربات تلگرام با Node.js"
+          en: "Implemented a Telegram bot with Node.js"
+      - id: gamma-users
+        text:
+          fa: "جذب ۳۰۰ کاربر فعال"
+          en: "Reached 300 active users"
+  - id: delta-scripts
+    name: {fa: "اسکریپت‌های دلتا", en: "Delta Scripts"}
+
+skills:
+  - {id: python, name: "Python", category: {fa: "زبان‌ها", en: "Languages"}}
+  - {id: fastapi, name: "FastAPI"}
+  - {id: redis, name: "Redis"}
+  - {id: django, name: "Django"}
+  - {id: cpp, name: "C++"}
+  - {id: aws, name: "AWS"}
+
+education:
+  - id: bsc-software
+    institution: {fa: "دانشگاه نمونه", en: "Example University"}
+    degree: {fa: "کارشناسی", en: "B.Sc."}
+    field: {fa: "مهندسی نرم‌افزار", en: "Software Engineering"}
+    start: "2014-09"
+    end: "2018-06"
+
+certifications:
+  - id: cloud-cert
+    name: {fa: "گواهی ابر", en: "Cloud Practitioner"}
+    issuer: {en: "Example Institute"}
+    date: "2020-11"
+
+languages:
+  - {id: lang-fa, name: {fa: "فارسی", en: "Persian"}, level: {fa: "زبان مادری", en: "Native"}}
+  - {id: lang-en, name: {fa: "انگلیسی", en: "English"}, level: {fa: "پیشرفته", en: "Advanced"}}

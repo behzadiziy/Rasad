@@ -1,0 +1,120 @@
+# Master resume: the only source of facts for resume tailoring.
+#
+# Copy this file to config/master_resume.yaml (gitignored) and replace the
+# fictional person below with your own data. Check it with:
+#   uv run python -c "from src.resume.models import load_master_resume; load_master_resume('config/master_resume.yaml')"
+#
+# Format:
+# - Every text is bilingual: {fa: ..., en: ...}. At least one language is
+#   required; the other falls back to it. A plain string (e.g. `PostgreSQL`)
+#   means the same text in both languages; use it for names written the same way.
+# - Every experience, bullet, project, skill, education, certification, and
+#   language has an `id`: kebab-case, unique in the whole file, and stable
+#   (tailored resumes refer to items by ID, so do not rename IDs later).
+# - Dates are YYYY-MM. `start`/`end`/`date` are Gregorian; the optional
+#   `*_jalali` fields hold the same month in the Jalali calendar. A current
+#   position has no `end`.
+# - Tailoring may only select, reorder, and rephrase what is written here, so
+#   state every fact, number, and tool you want the tailored resumes to use.
+
+contact:
+  name: {fa: "آرمان شیرازی", en: "Arman Shirazi"}
+  email: "arman.shirazi@example.com"
+  phone: "+98 900 000 0000"
+  location: {fa: "مشهد، ایران", en: "Mashhad, Iran"}
+  links:
+    - {label: "GitHub", url: "https://github.com/example-arman"}
+    - {label: "LinkedIn", url: "https://www.linkedin.com/in/example-arman"}
+
+summary:
+  fa: >-
+    مهندس نرم‌افزار با ۶ سال سابقه در توسعه بک‌اند با Python و ساخت سامانه‌های
+    مبتنی بر LLM. علاقه‌مند به خودکارسازی فرایندها و طراحی سرویس‌های مقیاس‌پذیر.
+  en: >-
+    Software engineer with 6 years of experience in Python backend development
+    and building LLM-based systems. Passionate about process automation and
+    designing scalable services.
+
+experiences:
+  - id: kavir-data-ai-engineer
+    company: {fa: "داده‌پردازان کویر", en: "Kavir Data"}
+    title: {fa: "مهندس هوش مصنوعی", en: "AI Engineer"}
+    location: {fa: "مشهد", en: "Mashhad"}
+    start: "2022-04"
+    start_jalali: "1401-01"
+    bullets:
+      - id: kavir-rag-assistant
+        text:
+          fa: "طراحی و پیاده‌سازی دستیار RAG برای اسناد داخلی با LangChain و PostgreSQL"
+          en: "Designed and built a RAG assistant for internal documents with LangChain and PostgreSQL"
+      - id: kavir-n8n-automation
+        text:
+          fa: "خودکارسازی ۱۲ فرایند پشتیبانی با n8n و کاهش ۴۰٪ زمان پاسخ‌گویی"
+          en: "Automated 12 support workflows with n8n, cutting response time by 40%"
+      - id: kavir-eval-pipeline
+        text:
+          fa: "ایجاد پایپ‌لاین ارزیابی خودکار برای پاسخ‌های مدل زبانی"
+          en: "Created an automated evaluation pipeline for language model answers"
+
+  - id: pars-cloud-backend
+    company: {fa: "ابر پارس", en: "Pars Cloud Labs"}
+    title: {fa: "توسعه‌دهنده بک‌اند", en: "Backend Developer"}
+    location: {fa: "تهران", en: "Tehran"}
+    start: "2019-09"
+    end: "2022-03"
+    start_jalali: "1398-06"
+    end_jalali: "1400-12"
+    bullets:
+      - id: pars-billing-api
+        text:
+          fa: "توسعه API صورتحساب با Django REST Framework برای بیش از ۵۰٬۰۰۰ کاربر"
+          en: "Developed the billing API with Django REST Framework for more than 50,000 users"
+      - id: pars-docker-ci
+        text:
+          fa: "راه‌اندازی CI/CD با GitLab CI و Docker"
+          en: "Set up CI/CD with GitLab CI and Docker"
+
+projects:
+  - id: persian-job-matcher
+    name: {fa: "تطبیق‌دهنده آگهی شغلی فارسی", en: "Persian Job Matcher"}
+    description:
+      fa: "ابزار متن‌باز برای تطبیق آگهی‌های شغلی فارسی با پروفایل کاربر"
+      en: "Open-source tool that matches Persian job ads with a user profile"
+    bullets:
+      - id: matcher-normalization
+        text:
+          fa: "نرمال‌سازی متن فارسی برای جست‌وجوی دقیق کلیدواژه‌ها"
+          en: "Persian text normalization for accurate keyword search"
+    links:
+      - {label: "GitHub", url: "https://github.com/example-arman/persian-job-matcher"}
+
+skills:
+  - {id: python, name: "Python", category: {fa: "زبان‌های برنامه‌نویسی", en: "Programming languages"}}
+  - {id: django, name: "Django", category: {fa: "فریم‌ورک‌ها", en: "Frameworks"}}
+  - {id: langchain, name: "LangChain", category: {fa: "هوش مصنوعی", en: "AI"}}
+  - {id: postgresql, name: "PostgreSQL", category: {fa: "پایگاه داده", en: "Databases"}}
+  - {id: docker, name: "Docker", category: {fa: "زیرساخت", en: "Infrastructure"}}
+  - {id: n8n, name: "n8n", category: {fa: "خودکارسازی", en: "Automation"}}
+  - id: technical-writing
+    name: {fa: "مستندنویسی فنی", en: "Technical writing"}
+
+education:
+  - id: bsc-computer-engineering
+    institution: {fa: "دانشگاه فردوسی مشهد", en: "Ferdowsi University of Mashhad"}
+    degree: {fa: "کارشناسی", en: "B.Sc."}
+    field: {fa: "مهندسی کامپیوتر", en: "Computer Engineering"}
+    start: "2014-09"
+    end: "2018-07"
+    start_jalali: "1393-06"
+    end_jalali: "1397-04"
+
+certifications:
+  - id: example-ml-course
+    name: {fa: "دوره یادگیری ماشین", en: "Machine Learning Course"}
+    issuer: {fa: "آکادمی نمونه", en: "Example Academy"}
+    date: "2021-05"
+    date_jalali: "1400-02"
+
+languages:
+  - {id: lang-persian, name: {fa: "فارسی", en: "Persian"}, level: {fa: "زبان مادری", en: "Native"}}
+  - {id: lang-english, name: {fa: "انگلیسی", en: "English"}, level: {fa: "پیشرفته", en: "Advanced"}}
