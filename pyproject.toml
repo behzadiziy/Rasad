@@ -1,5 +1,5 @@
 [project]
-name = "job-hunter-agent"
+name = "rasad"
 version = "0.1.0"
 description = "Async scraper for JobVision and Jobinja with a Persian-aware rule engine, SQLite state, and Telegram notifications"
 readme = "README.md"

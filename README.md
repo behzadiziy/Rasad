@@ -1,4 +1,4 @@
-# Job Hunter Agent
+# Rasad
 
 An asynchronous job-search agent for two Iranian job boards, [JobVision](https://jobvision.ir) and [Jobinja](https://jobinja.ir). It scrapes new postings, filters them against your search profiles with a Persian-aware rule engine, stores them in SQLite, and sends the matches to a Telegram channel.
 
